@@ -1,0 +1,4 @@
+# Stack related files
+.stack-work/
+stack.yaml
+

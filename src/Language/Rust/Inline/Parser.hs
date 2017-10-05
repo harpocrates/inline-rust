@@ -1,52 +1,58 @@
 module Language.Rust.Inline.Parser where
 
-import qualified Language.Rust.Syntax as Rust
-import qualified Language.Rust.Parser as Rust
-import qualified Language.Rust.Data.Position as Rust
+import Language.Rust.Syntax
+import Language.Rust.Parser
+import Language.Rust.Data.Position
 
 import Language.Haskell.TH
 
 import Data.String (fromString)
-import Control.Monad.Trans.Writer
 
 -- | Result of parsing a quasiquote. Quasiquotes are of the form `<ty> <block>` where the `<block>`
 -- possibly contains `$<ident>` to unescape. 
 data RustQuasiquoteParse = QQParse
-  { ty :: Rust.Ty Rust.Span                       -- The leading type
-  , body :: [Rust.Token]                          -- The body tokens, with `$(<ident>: <ty>)` pairs replaced by just `<ident>`
-  , variables :: [(String, Rust.Ty Rust.Span)]    -- The `$(<ident>: <ty>)` args to escape
+  { ty :: Ty Span                       -- The leading type
+  , body :: [Token]                     -- The body tokens, with `$(<ident>: <ty>)` pairs replaced by just `<ident>`
+  , variables :: [(String, Ty Span)]    -- The `$(<ident>: <ty>)` args to escape
   }
 
--- | Parse an inline Rust quasiquote
+-- | Parse an inline Rust quasiquote. The grammar for a quasiquote is
+--
+-- <quasiquote> ::= <ty> <body>
+--
+-- <body>       ::= '$' '(' <ident> ':' <ty> ')' <body>
+--                | <tok> <body>
+--                | {- empty -}
+--
 parseQQ :: String -> Q RustQuasiquoteParse
-parseQQ input = do
+parseQQ input = case execParser (lexTokens lexNonSpace) (fromString input) initPos of
+                  Left (_, msg) -> fail msg
+                  Right spToks' -> go (LeadingType []) spToks'
+  where
+  go :: ProcessState -> [Spanned Token] -> Q RustQuasiquoteParse
+  -- While in the leading type phase, keep going until you hit the first '{'
+  go (LeadingType _     )       []                                   = fail "Ran out of input while parsing leading type in quasiquote"
+  go (LeadingType tyToks) body'@(Spanned (OpenDelim Brace) _ : _   ) = either (fail . snd) (\ty' -> go (Body ty' [] []) body') (parseFromToks tyToks)
+  go (LeadingType tyToks)       (tok                         : rest) = go (LeadingType (tok : tyToks)) rest 
+  -- While in the body phase, keep going until there are no more tokens, or you hit '$(<ident> :'
+  go (Body ty' body' vars)      []                                   = pure (QQParse ty' body' vars)
+  go (Body ty' body' vars)      (Spanned Dollar _ : Spanned (OpenDelim Paren) _ : Spanned (IdentTok i) _ : Spanned Colon _ : rest) = go (Escape ty' body' vars 1 i rest) rest
+  go (Body ty' body' vars)      (tok                                                                                       : rest) = go (Body ty' (unspan tok : body') vars) rest
+  -- While in the escape phase, keep going until you balance out the parens
+  go (Escape _   _    _    _ _ _     ) []   = fail "Ran out of input while parsing variable escape (did you forget a closing paren?)"
+  go (Escape ty' body' vars 0 i tyToks) rest = either (fail . snd) (\ty'' -> go (Body ty' (IdentTok i : body') ((show i, ty'') : vars)) rest) (parseFromToks tyToks)
+  go (Escape ty' body' vars p i tyToks) ( tok@(Spanned (OpenDelim Paren) _) : rest) = go (Escape ty' body' vars (p + 1) i (tok : tyToks)) rest
+  go (Escape ty' body' vars p i tyToks) ( tok@(Spanned (CloseDelim Paren) _) : rest) = go (Escape ty' body' vars (p - 1) i (tok : tyToks)) rest
+  go (Escape ty' body' vars p i tyToks) ( tok : rest) = go (Escape ty' body' vars p i (tok : tyToks)) rest
 
-  -- Start by tokenizing everything
-  spToks <- case Rust.execParser (Rust.lexTokens Rust.lexNonSpace) (fromString input) Rust.initPos of
-              Left (_, msg) -> fail msg
-              Right spToks' -> pure spToks'
 
-  -- TODO: This is an approximate way to split up the type and body. It isn't foolproof though,
-  -- since types can contain macros which _can_ be of the form `HList!{i32, (), u64}` (although most
-  -- people usually use brackets for type-macros `HList![i32, (), u64]).
-  let (tyToks, bodyToks) = span (\t -> case t of { Rust.Spanned (Rust.OpenDelim Rust.Brace) _ -> True; _ -> False }) spToks
+  parseFromToks :: Parse a => [Spanned Token] -> Either (Position, String) a
+  parseFromToks toks = execParserTokens parser (reverse toks) initPos
 
-  -- Parse the type
-  ty <- case Rust.execParserFromTokens parser tyToks initPos of
-          Left (_, msg) -> fail msg
-          Right ty' -> pure ty'
-
-  ---WIP from here on
-  --
-  -- Extract from the list of tokens successive '$' 'IdentTok' tokens, drop the '$' and keep note of
-  -- the identifier string
-  let process :: [Rust.Token] -> Writer [(String, Rust.Ty Rust.Span)] [Rust.Token]
-      process [] = pure []
-      process (Rust.Dollar : rest@(Rust.IdentTok i : _)) = tell [show i] *> process rest
-      process (tok : rest) = fmap (tok :) (process rest)
-
-  let (body, variables) = runWriter $ process toks
-
-  -- Pack all of the information up
-  pure (QQParse ty body variables)
-
+data ProcessState
+  = LeadingType [Spanned Token]                   -- Tokens so far in the type
+  | Body (Ty Span)                                -- Leading type
+         [Token] [(String, Ty Span)]              -- Tokens to far in the body, as well as escape args so far
+  | Escape (Ty Span) [Token] [(String, Ty Span)]  -- State from 'Body'
+           Int                                    -- Paren count (when back to 0, we return to the 'Body' state)
+           Ident [Spanned Token]                  -- Identifier name and tokens so far in the type 
