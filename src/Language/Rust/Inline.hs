@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, QuasiQuotes, TemplateHaskell #-}
+{-# LANGUAGE ForeignFunctionInterface, QuasiQuotes, TemplateHaskell, BangPatterns #-}
 
 module Language.Rust.Inline where
 
@@ -7,6 +7,7 @@ import Language.Rust.Inline.Parser
 
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
+import Language.Haskell.TH.Quote
 
 import Data.List
 import Data.Traversable (for)
@@ -25,6 +26,31 @@ import System.IO.Temp
 
 import System.Process
 import System.Exit
+
+import System.Directory (removeFile)
+
+exp :: QuasiQuoter
+exp = QuasiQuoter
+  { quoteExp = expQuoter Safe True
+  , quotePat = fail "Only expressions can be quasiquoted"
+  , quoteType = fail "Only expressions can be quasiquoted"
+  , quoteDec = fail "Only expressions can be quasiquoted"
+  }
+
+expEffects :: QuasiQuoter
+expEffects = QuasiQuoter
+  { quoteExp = expQuoter Safe False
+  , quotePat = fail "Only expressions can be quasiquoted"
+  , quoteType = fail "Only expressions can be quasiquoted"
+  , quoteDec = fail "Only expressions can be quasiquoted"
+  }
+
+-- | Make a quasiquoter
+expQuoter :: Safety -> Bool -> String -> Q Exp
+expQuoter safety isPure qq = do
+  parsed <- parseQQ qq
+  context <- getContext
+  processQQ context safety isPure parsed
 
 -- | Generates the C and Rust files
 processQQ :: Context -> Safety -> Bool -> RustQuasiquoteParse -> Q Exp
@@ -51,7 +77,7 @@ processQQ con safety isPure (QQParse rustRet rustBody rustArgs) = do
                  case arg of
                    Nothing -> fail ("could not find Haskell variable `" ++ argStr ++ "'")
                    Just argName -> pure (VarE argName)
-  let haskCall = foldl1 AppE (VarE qqName : haskArgsE)
+  let haskCall = foldl AppE (VarE qqName) haskArgsE
 
   -- Generate the Rust function
   let render :: Pretty a => a -> String
@@ -80,8 +106,15 @@ addForeignRustFile rustSrc = addForeignObject =<< runIO staticLib
           when (ec /= ExitSuccess) $ do
             fail ("Rust source in quasiquote failed to compile:\n" ++ stderr)
 
-          -- Read in linkable library output and add it
-          BS.readFile fpOut
+          -- Read in linkable library output
+          !obj <- BS.readFile fpOut
+
+          -- Clean up
+          removeFile fpIn
+          removeFile fpOut
+
+          -- Return the binary from the library
+          pure obj
 
 -- Proposed in <https://phabricator.haskell.org/D4064>
 addForeignObject :: ByteString -> Q ()
