@@ -40,9 +40,11 @@ module Language.Rust.Inline (
   singleton,
   mkContext,
   lookupTypeInContext,
+  getTypeInContext,
   -- ** Built-in contexts
   basic,
   libc,
+  functions,
 
   -- * Top-level Rust items
   externCrate,
@@ -191,8 +193,8 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
 
   -- Find out what the corresponding Haskell representations are for the
   -- argument and return types
-  haskRet <- lookupType (void rustRet)
-  haskArgs <- traverse (\(_, rustArg) -> lookupType (void rustArg)) rustArgs
+  haskRet <- getType (void rustRet)
+  haskArgs <- traverse (\(_, rustArg) -> getType (void rustArg)) rustArgs
 
   -- Generate the Haskell FFI import declaration and emit it
   haskSig <- foldr (\l r -> [t| $(pure l) -> $r |])

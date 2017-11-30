@@ -16,7 +16,7 @@ module Language.Rust.Inline.Context where
 
 import Language.Rust.Inline.Pretty ( renderType )
 
-import Language.Rust.Syntax        ( Ty )
+import Language.Rust.Syntax        ( Ty(BareFn), Abi(..), FnDecl(..), Arg(..) )
 import Language.Rust.Quote         ( ty )
 
 import Language.Haskell.TH         ( Q, Type )
@@ -25,10 +25,11 @@ import Data.Semigroup              ( Semigroup )
 import Data.Monoid                 ( First(..) )
 import Data.Typeable               ( Typeable )
 import Control.Monad               ( void )
+import Data.Traversable            ( for )
 
 import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
-import Foreign.Ptr                 ( IntPtr, WordPtr )
+import Foreign.Ptr                 ( IntPtr, WordPtr, FunPtr )
 import Foreign.C.Types             ( CBool, CChar, CShort, CInt, CLong, CLLong,
                                      CSize, CFloat, CDouble, CIntPtr, CUIntPtr )
 -- Easier on the eyes
@@ -49,24 +50,30 @@ newtype Context = Context [ RType -> Context -> First (Q HType) ]
 --
 -- It is expected that the 'HType' found from an 'RType' have a 'Storable'
 -- instance which has the memory layout of 'RType'.
-lookupTypeInContext :: RType -> Context -> Q HType
+lookupTypeInContext :: RType -> Context -> First (Q HType)
 lookupTypeInContext rustType context@(Context rules) = 
-  case getFirst matchingRules of
+  foldMap (\fits -> fits rustType context) rules
+
+
+-- | Partial version of 'lookupTypeInContext' that fails with an error message
+-- if the type is not convertible.
+getTypeInContext :: RType -> Context -> Q HType
+getTypeInContext rustType context = 
+  case getFirst (lookupTypeInContext rustType context) of
     Just hType -> hType
     Nothing -> fail $ unwords [ "Could not find information about"
                               , renderType rustType
                               , "in the context"
                               ]
-  where
-    matchingRules = foldMap (\fits -> fits rustType context) rules
-    
+
+
 -- | Make a 'Context' consisting of rules to map the Rust types on the left to
 -- the Haskell types on the right.
 mkContext :: [(Ty a, Q HType)] -> Context
 mkContext = Context . map fits 
   where
-    fits (rts, qht) rt _ | rt == void rts = First (Just qht)
-                         | otherwise = First Nothing
+    fits (rts, qht) rt _ | rt == void rts = pure qht
+                         | otherwise = mempty
 
 -- | Make a singleton 'Context' consisting of a rule to map the given Rust type
 -- to the given Haskell type.
@@ -112,3 +119,27 @@ basic = mkContext
   , ([ty| usize |], [t| WordPtr |])
   , ([ty| ()    |], [t| ()      |])
   ]
+
+-- | Function pointers.
+functions :: Context
+functions = Context [ rule ]
+  where
+
+  rule :: RType -> Context -> First (Q HType)
+  rule (BareFn _ C _ (FnDecl args retTy False _) _) context = do
+
+    args' <- for args $ \arg -> do
+                Arg _ argTy _ <- pure arg
+                lookupTypeInContext argTy context
+
+    retTy' <- case retTy of
+                Just t -> lookupTypeInContext t context
+                Nothing -> pure [t| () |]
+    
+    let hFunTy = foldl1 (\l r -> [t| $l -> $r |]) (args' ++ [ retTy' ])
+    let hFunPtr = [t| FunPtr $hFunTy |]
+
+    pure hFunPtr
+  
+  rule _ _ = mempty
+

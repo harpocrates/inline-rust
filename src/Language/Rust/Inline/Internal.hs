@@ -13,7 +13,7 @@ module Language.Rust.Inline.Internal (
   emitCodeBlock,
   externCrate,
   setContext,
-  lookupType,
+  getType,
   addForeignRustFile,
   addForeignRustFile',
 ) where
@@ -105,10 +105,10 @@ setContext context = do
 
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
-lookupType :: RType -> Q HType
-lookupType rustType = do
+getType :: RType -> Q HType
+getType rustType = do
   context <- getContext <$> initModuleState Nothing
-  lookupTypeInContext rustType context
+  getTypeInContext rustType context
 
 
 -- | Add an extern crate dependency to this module. This is equivalent to
