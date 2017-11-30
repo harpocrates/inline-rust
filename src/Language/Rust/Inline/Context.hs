@@ -1,73 +1,84 @@
-{-# LANGUAGE TypeFamilies, QuasiQuotes, TemplateHaskell, GeneralizedNewtypeDeriving, DeriveDataTypeable #-}
+{-|
+Module      : Language.Rust.Inline.Context
+Description : Defines contexts (rules mapping Rust types to Haskell types)
+Copyright   : (c) Alec Theriault, 2017
+License     : BSD-style
+Maintainer  : alec.theriault@gmail.com
+Stability   : experimental
+Portability : GHC
+-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
-module Language.Rust.Inline.Context (
-  -- * Types
-  RType,
-  HType,
-  Context,
-  singleton,
-  lookupTypeInContext,
+module Language.Rust.Inline.Context where
 
-  -- * Contexts
-  basic,
-  libc,
-) where
+import Language.Rust.Inline.Pretty ( renderType )
 
-import qualified Language.Haskell.TH as Haskell
-import qualified Language.Rust.Syntax as Rust
+import Language.Rust.Syntax        ( Ty )
+import Language.Rust.Quote         ( ty )
 
-import Language.Rust.Quote        ( ty )
-import Language.Haskell.TH.Syntax ( Q )
+import Language.Haskell.TH         ( Q, Type )
 
-import Data.Semigroup             ( Semigroup )
-import Data.Monoid                ( First(..) )
-import Data.Typeable              ( Typeable )
+import Data.Semigroup              ( Semigroup )
+import Data.Monoid                 ( First(..) )
+import Data.Typeable               ( Typeable )
+import Control.Monad               ( void )
 
-import Control.Monad              ( void )
-
-import Data.Int
-import Data.Word
-import Foreign.C.Types
-import Foreign.Ptr
-
-type RType = Rust.Ty ()
-type HType = Haskell.Type
+import Data.Int                    ( Int8, Int16, Int32, Int64 )
+import Data.Word                   ( Word8, Word16, Word32, Word64 )
+import Foreign.Ptr                 ( IntPtr, WordPtr )
+import Foreign.C.Types             ( CBool, CChar, CShort, CInt, CLong, CLLong,
+                                     CSize, CFloat, CDouble, CIntPtr, CUIntPtr )
+-- Easier on the eyes
+type RType = Ty ()
+type HType = Type
 
 -- | Represents a prioritized set of rules for converting a Rust type to a
--- Haskell one.
+-- Haskell one. The 'Context' argument encodes the fact that we may need look
+-- recursively into the 'Context' again before possibly producing a Haskell
+-- type.
 newtype Context = Context [ RType -> Context -> First (Q HType) ]
-  deriving (Monoid, Semigroup, Typeable) 
+  deriving (Semigroup, Monoid, Typeable) 
+
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
+-- The approach taken is to scan the context rules from left to right looking
+-- for the first successful conversion to a Haskell type.
 --
 -- It is expected that the 'HType' found from an 'RType' have a 'Storable'
 -- instance which has the memory layout of 'RType'.
 lookupTypeInContext :: RType -> Context -> Q HType
 lookupTypeInContext rustType context@(Context rules) = 
   case getFirst matchingRules of
-    Nothing -> fail "Could not find information about TODO in the context"
-    Just tup -> tup
+    Just hType -> hType
+    Nothing -> fail $ unwords [ "Could not find information about"
+                              , renderType rustType
+                              , "in the context"
+                              ]
   where
     matchingRules = foldMap (\fits -> fits rustType context) rules
     
-
--- | Convenient function for making the definition of simple 'Context's nice.
-mkListContext :: [(Rust.Ty a, Q HType)] -> Context
-mkListContext = Context . map fits 
+-- | Make a 'Context' consisting of rules to map the Rust types on the left to
+-- the Haskell types on the right.
+mkContext :: [(Ty a, Q HType)] -> Context
+mkContext = Context . map fits 
   where
     fits (rts, qht) rt _ | rt == void rts = First (Just qht)
                          | otherwise = First Nothing
 
--- | Make a singleton 'Context'.
-singleton :: Rust.Ty a -> Q HType -> Context
-singleton rts qht = mkListContext [(rts, qht)]
+-- | Make a singleton 'Context' consisting of a rule to map the given Rust type
+-- to the given Haskell type.
+singleton :: Ty a -> Q HType -> Context
+singleton rts qht = mkContext [(rts, qht)]
 
 
 -- | Types defined in 'Foreign.C.Types' and the 'libc' crate.
 --
 -- TODO: Expand this
 libc :: Context
-libc = mkListContext
+libc = mkContext
   [ ([ty| libc::boolean_t  |], [t| CBool    |]) -- _Bool
   , ([ty| libc::c_char     |], [t| CChar    |]) -- char
   , ([ty| libc::c_short    |], [t| CShort   |]) -- short
@@ -85,7 +96,7 @@ libc = mkListContext
 --
 -- TODO: Expand this
 basic :: Context
-basic = mkListContext
+basic = mkContext
   [ ([ty| bool  |], [t| Bool    |])
   , ([ty| i8    |], [t| Int8    |])
   , ([ty| i16   |], [t| Int16   |])
@@ -98,5 +109,6 @@ basic = mkListContext
   , ([ty| f32   |], [t| Float   |])
   , ([ty| f64   |], [t| Double  |])
   , ([ty| isize |], [t| IntPtr  |]) 
-  , ([ty| usize |], [t| WordPtr |]) 
+  , ([ty| usize |], [t| WordPtr |])
+  , ([ty| ()    |], [t| ()      |])
   ]

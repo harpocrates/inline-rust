@@ -1,3 +1,12 @@
+{-|
+Module      : Language.Rust.Inline.Internal
+Description : Manages the module-level state
+Copyright   : (c) Alec Theriault, 2017
+License     : BSD-style
+Maintainer  : alec.theriault@gmail.com
+Stability   : experimental
+Portability : GHC
+-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Rust.Inline.Internal (
@@ -15,9 +24,6 @@ import Language.Haskell.TH.Syntax
 import Data.Typeable                           ( Typeable )
 import Control.Monad                           ( when, void )
 import Data.Maybe                              ( fromMaybe )
-
-import Data.Text.Prettyprint.Doc               ( layoutPretty, defaultLayoutOptions )
-import Data.Text.Prettyprint.Doc.Render.String ( renderString )
 
 import System.Process                          ( readProcessWithExitCode )
 import System.Exit                             ( ExitCode(..) )
@@ -58,23 +64,25 @@ initModuleState contextMaybe = do
       pure m
 
 
--- | Emit code into the 'codeBlocks' field of the 'ModuleState'.
-emitCodeBlock :: String -> Q ()
+-- | Emit a raw 'String' of Rust code into the current module.
+emitCodeBlock :: String -> Q [Dec]
 emitCodeBlock code = do
   moduleState <- initModuleState Nothing
   putQ (moduleState { codeBlocks = code : codeBlocks moduleState })
+  pure []
 
 
 -- | Sets the 'Context' for the current module. This function, if called, must
 -- be called before any of the other TH functions in this module.
 --
 -- >  setContext (basic <> libc)
-setContext :: Context -> Q ()
+setContext :: Context -> Q [Dec]
 setContext context = do
   moduleState :: Maybe ModuleState <- getQ
   case moduleState of
     Nothing -> void (initModuleState (Just context))
     Just _ -> fail "The module has already been initialised (setContext)"
+  pure []
 
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.

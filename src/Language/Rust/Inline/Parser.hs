@@ -17,8 +17,6 @@ import Language.Rust.Data.Position
 
 import Language.Haskell.TH
 
-import Debug.Trace
-
 -- | Result of parsing a quasiquote. Quasiquotes are of the form
 -- `<ty> { <block> }` where the `<block>` possibly contains unescaped arguments
 -- in the form of `$(<ident>: <ty>)`.

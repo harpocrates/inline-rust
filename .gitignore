@@ -1,4 +1,15 @@
+# Cabal related
+.cabal-sandbox
+cabal.sandbox.config
+dist/
+
 # Stack related files
 .stack-work/
 stack.yaml
 
+# Other
+**/*.o
+**/*.hi
+**/*.dyn_o
+**/*.dyn_hi
+.DS_Store
