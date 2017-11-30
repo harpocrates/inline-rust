@@ -30,9 +30,6 @@ module Language.Rust.Inline (
   -- $interruptible
   rustInterruptible,
   rustInterruptibleIO,
-
-  -- * Top-level Rust items
-  emitCodeBlock,
  
   -- * Contexts
   Context(..),
@@ -46,6 +43,10 @@ module Language.Rust.Inline (
   -- ** Built-in contexts
   basic,
   libc,
+
+  -- * Top-level Rust items
+  externCrate,
+  emitCodeBlock,
 ) where
 
 import Language.Rust.Inline.Context 
