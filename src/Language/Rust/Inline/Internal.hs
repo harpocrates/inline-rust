@@ -24,14 +24,14 @@ import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 
 import Data.Typeable                           ( Typeable )
-import Control.Monad                           ( when, void )
+import Control.Monad                           ( void )
 import Data.Maybe                              ( fromMaybe )
 
 import System.FilePath                         ( (</>), (<.>) )
 import System.Directory                        ( renameFile,
                                                  createDirectoryIfMissing,
                                                  removePathForcibly )
-import System.Process                          ( readProcessWithExitCode )
+import System.Process                          ( spawnProcess, waitForProcess )
 import System.Exit                             ( ExitCode(..) )
 
 -- | We maintain this state while processing the module. The idea is that each
@@ -83,7 +83,7 @@ initModuleState contextMaybe = do
       pure m
 
 
--- | Emit a raw 'String' of Rust code into the current module.
+-- | Emit a raw 'String' of Rust code into the current 'ModuleState'.
 emitCodeBlock :: String -> Q [Dec]
 emitCodeBlock code = do
   moduleState <- initModuleState Nothing
@@ -100,7 +100,7 @@ setContext context = do
   moduleState :: Maybe ModuleState <- getQ
   case moduleState of
     Nothing -> void (initModuleState (Just context))
-    Just _ -> fail "The module has already been initialised (setContext)"
+    Just _ -> reportError "The module has already been initialised (setContext)"
   pure []
 
 
@@ -142,12 +142,11 @@ addForeignRustFile rustcArgs rustSrc = do
   
   -- Call `rustc`
   let rustcAllArgs = rustcArgs ++ [ fpIn, "-o", fpOut ]
-  (ec, _, stderr) <- runIO $ readProcessWithExitCode "rustc" rustcAllArgs ""
-  when (ec /= ExitSuccess) $ do
-    fail ("Rust source in quasiquote failed to compile:\n" ++ stderr)
-  
-  -- Link in the object
-  addForeignFilePath RawObject fpOut
+  ec <- runIO $ spawnProcess "rustc" rustcAllArgs >>= waitForProcess
+  if ec /= ExitSuccess
+    then reportError "Rust source in quasiquote failed to compile."
+    else -- Link in the object
+         addForeignFilePath RawObject fpOut
 
 
 -- | This is a more involved version of 'addForeignRustFile' which works for
@@ -190,14 +189,13 @@ addForeignRustFile' dir rustcArgs rustSrc dependencies = do
                   , "--"
                   ] ++ rustcArgs
 
-  (ec, _, stderr) <- runIO $ readProcessWithExitCode "cargo" cargoArgs ""
-  when (ec /= ExitSuccess) $ do
-    fail ("Rust source in quasiquote failed to compile:\n" ++ stderr)
+  ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
+  if (ec /= ExitSuccess)
+    then reportError "Rust source in quasiquote failed to compile."
+    else do -- Move the library to a GHC temporary file
+            rustLib' <- addTempFile "a"
+            runIO $ renameFile rustLib rustLib'
 
-  -- Move the library to a GHC temporary file
-  rustLib' <- addTempFile "a"
-  runIO $ renameFile rustLib rustLib'
-
-  -- Link in the object
-  addForeignFilePath RawObject rustLib'
+            -- Link in the object
+            addForeignFilePath RawObject rustLib'
 

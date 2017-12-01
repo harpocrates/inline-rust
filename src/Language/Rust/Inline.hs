@@ -48,7 +48,6 @@ module Language.Rust.Inline (
 
   -- * Top-level Rust items
   externCrate,
-  emitCodeBlock,
 ) where
 
 import Language.Rust.Inline.Context 
@@ -86,21 +85,26 @@ import Data.Traversable                        ( for )
 -- | Safe and pure expression quasiquoter. It is up the user to make sure the
 -- Rust expression they use is pure.
 --
+-- This can also be used in a declaration context to just emit raw Rust code.
+-- You can use this to define Rust items that you can use in any quasiquote in
+-- the module.
+--
 -- @
 --     rustInc x :: Int32 -> Int32
 --     rustInc x = [rust| i32 { 1i32 + $(x: i32) } |]
 -- @ 
 rust :: QuasiQuoter
-rust = rustQuasiQuoter Safe True
+rust = rustQuasiQuoter Safe True True
 
--- | Safe and impure expression quasiquoter.
+-- | Safe and impure expression quasiquoter. Like 'rust', this can also be used
+-- to emit top-level Rust items when used in declaration context.
 --
 -- @
 --     rustHello :: Int32 -> IO ()
 --     rustHello n = [rustIO| () { println!("Your number: {}", $(n: i32)) } |]
 -- @ 
 rustIO :: QuasiQuoter
-rustIO = rustQuasiQuoter Safe False
+rustIO = rustQuasiQuoter Safe False True
 
 
 -- $unsafe
@@ -119,7 +123,7 @@ rustIO = rustQuasiQuoter Safe False
 --
 -- Faster, but use with caution.
 rustUnsafe :: QuasiQuoter
-rustUnsafe = rustQuasiQuoter Unsafe True
+rustUnsafe = rustQuasiQuoter Unsafe True False
 
 -- | Unsafe and impure expression quasiquoter. It is up the user to make sure
 -- the Rust expression they use doesn't block and doesn't call back into the
@@ -127,7 +131,7 @@ rustUnsafe = rustQuasiQuoter Unsafe True
 --
 -- Faster, but use with caution.
 rustUnsafeIO :: QuasiQuoter
-rustUnsafeIO = rustQuasiQuoter Unsafe False
+rustUnsafeIO = rustQuasiQuoter Unsafe False False
 
 
 -- $interruptible
@@ -144,30 +148,43 @@ rustUnsafeIO = rustQuasiQuoter Unsafe False
 --
 -- Slower, but safer around exception-heavy code.
 rustInterruptible :: QuasiQuoter
-rustInterruptible = rustQuasiQuoter Interruptible True
+rustInterruptible = rustQuasiQuoter Interruptible True False
 
 -- | Interrupt and impure expression quasiquoter.
 --
 -- Slower, but safer around exception-heavy code.
 rustInterruptibleIO :: QuasiQuoter
-rustInterruptibleIO = rustQuasiQuoter Interruptible False
+rustInterruptibleIO = rustQuasiQuoter Interruptible False False
 
 
--- | Make an expression quasiquoter. This packages together the work of parsing
--- the quasiquote contents, generating Haskell FFI bindings, generating and
--- compiling Rust source, then linking in the Rust object file.
-rustQuasiQuoter :: Safety -> Bool -> QuasiQuoter
-rustQuasiQuoter safety isPure = QuasiQuoter { quoteExp = expQuoter
-                                            , quotePat = err 
-                                            , quoteType = err
-                                            , quoteDec = err 
-                                            }
+-- | Make an expression/declaration quasiquoter.
+--
+-- For expressions, this packages together the work of parsing the quasiquote
+-- contents, generating Haskell FFI bindings, generating and compiling Rust
+-- source, then linking in the Rust object file.
+--
+-- For declarations (if supported), this emits raw code.
+rustQuasiQuoter :: Safety      -- ^ safety of FFI
+                -> Bool        -- ^ purity of FFI
+                -> Bool        -- ^ support declarations
+                -> QuasiQuoter
+rustQuasiQuoter safety isPure supportDecs = QuasiQuoter { quoteExp = expQuoter
+                                                        , quotePat = err 
+                                                        , quoteType = err
+                                                        , quoteDec = decQuoter 
+                                                        }
   where
-    err = fail "(inline-rust): Only expressions can be quasiquoted"
+    who | supportDecs = "expressions and declarations"
+        | otherwise   = "expressions"
+
+    err = fail ("(inline-rust): Only " ++ who ++ " can be quasiquoted")
 
     expQuoter qq = do
       parsed <- parseQQ qq
       processQQ safety isPure parsed
+
+    decQuoter | supportDecs = emitCodeBlock
+              | otherwise = err
 
 
 -- | This function sums up the packages. What it does:
@@ -207,7 +224,7 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
   haskArgsE <- for rustArgs $ \(argStr, _) -> do 
                  arg <- lookupValueName argStr
                  case arg of
-                   Nothing -> fail ("could not find Haskell variable `" ++ argStr ++ "'")
+                   Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
                    Just argName -> pure (VarE argName)
   let haskCall = foldl AppE (VarE qqName) haskArgsE
 
