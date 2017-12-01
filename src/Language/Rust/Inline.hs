@@ -62,6 +62,29 @@ import Control.Monad                           ( void )
 import Data.List                               ( intercalate )
 import Data.Traversable                        ( for )
 
+-- This module provides the facility for dropping in bits of Rust code into your
+-- Haskell project. 
+--
+-- == How it works
+--
+-- This works by the magic of Template Haskell. In a nutshell, for every Haskell
+-- source with a Rust quasiquote in it, a Rust source file is generated. Into
+-- this file are added
+-- 
+--   * all top-level Rust quasiquotes (contents are added in as-is)
+--
+--   * functions for all expression-level quasiquotes (function arguments
+--     correspond to referenced Haskell variables)
+--
+-- On the Haskell side, every expression quasiquote generates an FFI import
+-- to match the generated Rust function and is then replaced with an expression
+-- calling that function (passed in as arguments the Haskell variables the
+-- quasiquote used).
+--
+-- The Rust source file is compiled (by `rustc` if there are no extern crates
+-- or by `cargo` - dependencies are placed in `.inline-rust-quasi` - if there
+-- are). Finally, the resulting static library is passed to GHC through
+-- Template Haskell.
 
 -- $quasiquoters
 --

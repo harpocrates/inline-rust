@@ -29,8 +29,7 @@ import Data.Maybe                              ( fromMaybe )
 
 import System.FilePath                         ( (</>), (<.>) )
 import System.Directory                        ( renameFile,
-                                                 createDirectoryIfMissing,
-                                                 removePathForcibly )
+                                                 createDirectoryIfMissing )
 import System.Process                          ( spawnProcess, waitForProcess )
 import System.Exit                             ( ExitCode(..) )
 
@@ -64,14 +63,13 @@ initModuleState contextMaybe = do
         let code' = unlines (reverse code)
 
         -- If there are no dependencies, run `rustc`. Else, go through `cargo`
+        -- and store dependencies in `.inline-rust-quasi` folder.
         if null deps
           then addForeignRustFile [ "--crate-type=staticlib" ] code'
-          else do -- TODO: we need a real temporary directory - one in a system
-                  -- temporary location with some better cleanup guarantees
-                  let dir = ".inline-rust-quasi"
-                  runIO $ createDirectoryIfMissing False dir
+          else do Module _ name <- thisModule
+                  let dir = ".inline-rust-quasi" </> modString name
+                  runIO $ createDirectoryIfMissing True dir
                   addForeignRustFile' dir [] code' deps
-                  runIO $ removePathForcibly dir
 
       
       -- add a module state
