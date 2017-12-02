@@ -19,7 +19,8 @@ import Language.Rust.Inline.Pretty ( renderType )
 import Language.Rust.Syntax        ( Ty(BareFn), Abi(..), FnDecl(..), Arg(..) )
 import Language.Rust.Quote         ( ty )
 
-import Language.Haskell.TH         ( Q, Type )
+import Language.Haskell.TH 
+import Language.Haskell.TH.Syntax  ( addTopDecls ) 
 
 import Data.Semigroup              ( Semigroup )
 import Data.Monoid                 ( First(..) )
@@ -30,8 +31,8 @@ import Data.Traversable            ( for )
 import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
 import Foreign.Ptr                 ( IntPtr, WordPtr, FunPtr )
-import Foreign.C.Types             ( CBool, CChar, CShort, CInt, CLong, CLLong,
-                                     CSize, CFloat, CDouble, CIntPtr, CUIntPtr )
+import Foreign.C.Types             -- pretty much every type here is used
+
 -- Easier on the eyes
 type RType = Ty ()
 type HType = Type
@@ -41,8 +42,7 @@ type HType = Type
 -- recursively into the 'Context' again before possibly producing a Haskell
 -- type.
 newtype Context = Context [ RType -> Context -> First (Q HType) ]
-  deriving (Semigroup, Monoid, Typeable) 
-
+  deriving (Semigroup, Monoid, Typeable)
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
 -- The approach taken is to scan the context rules from left to right looking
@@ -50,15 +50,15 @@ newtype Context = Context [ RType -> Context -> First (Q HType) ]
 --
 -- It is expected that the 'HType' found from an 'RType' have a 'Storable'
 -- instance which has the memory layout of 'RType'.
-lookupTypeInContext :: RType -> Context -> First (Q HType)
-lookupTypeInContext rustType context@(Context rules) = 
+lookupTypeInContext :: RType -> Context -> First (Q (HType))
+lookupTypeInContext rustType context@(Context rules) =
   foldMap (\fits -> fits rustType context) rules
 
 
 -- | Partial version of 'lookupTypeInContext' that fails with an error message
 -- if the type is not convertible.
 getTypeInContext :: RType -> Context -> Q HType
-getTypeInContext rustType context = 
+getTypeInContext rustType context =
   case getFirst (lookupTypeInContext rustType context) of
     Just hType -> hType
     Nothing -> fail $ unwords [ "Could not find information about"
@@ -83,28 +83,48 @@ singleton rts qht = mkContext [(rts, qht)]
 
 -- | Types defined in 'Foreign.C.Types' and the 'libc' crate.
 --
--- TODO: Expand this
+-- There should be no conversion required here - these have /identical/ memory
+-- layouts (since they both promise to have the same memory layout as C) and are
+-- passed on the stack.
 libc :: Context
 libc = mkContext
-  [ ([ty| libc::boolean_t  |], [t| CBool    |]) -- _Bool
-  , ([ty| libc::c_char     |], [t| CChar    |]) -- char
-  , ([ty| libc::c_short    |], [t| CShort   |]) -- short
-  , ([ty| libc::c_int      |], [t| CInt     |]) -- int
-  , ([ty| libc::c_long     |], [t| CLong    |]) -- long
-  , ([ty| libc::c_longlong |], [t| CLLong   |]) -- long long
-  , ([ty| libc::size_t     |], [t| CSize    |]) -- size_t
-  , ([ty| libc::c_float    |], [t| CFloat   |]) -- float
-  , ([ty| libc::c_double   |], [t| CDouble  |]) -- double
-  , ([ty| libc::intptr_t   |], [t| CIntPtr  |]) -- intptr_t
-  , ([ty| libc::uintptr_t  |], [t| CUIntPtr |]) -- uintptr_t
+  [ ([ty| libc::c_char      |], [t| CChar      |]) -- char
+  , ([ty| libc::c_schar     |], [t| CSChar     |]) -- signed char
+  , ([ty| libc::c_uchar     |], [t| CUChar     |]) -- unsigned char
+  , ([ty| libc::c_short     |], [t| CShort     |]) -- short
+  , ([ty| libc::c_ushort    |], [t| CUShort    |]) -- unsigned short
+  , ([ty| libc::c_int       |], [t| CInt       |]) -- int
+  , ([ty| libc::c_uint      |], [t| CUInt      |]) -- unsigned int
+  , ([ty| libc::c_long      |], [t| CLong      |]) -- long
+  , ([ty| libc::c_ulong     |], [t| CULong     |]) -- unsigned long
+  , ([ty| libc::ptrdiff_t   |], [t| CPtrdiff   |]) -- ptrdiff_t
+  , ([ty| libc::size_t      |], [t| CSize      |]) -- size_t
+  , ([ty| libc::wchar_t     |], [t| CWchar     |]) -- wchar_t
+  , ([ty| libc::c_longlong  |], [t| CLLong     |]) -- long long
+  , ([ty| libc::c_ulonglong |], [t| CULLong    |]) -- unsigned long long
+  , ([ty| libc::boolean_t   |], [t| CBool      |]) -- bool
+  , ([ty| libc::intptr_t    |], [t| CIntPtr    |]) -- intptr_t
+  , ([ty| libc::uintptr_t   |], [t| CUIntPtr   |]) -- uintptr_t
+  , ([ty| libc::intmax_t    |], [t| CIntMax    |]) -- intmax_t
+  , ([ty| libc::uintmax_t   |], [t| CUIntMax   |]) -- unsigned intmax_t
+  , ([ty| libc::clock_t     |], [t| CClock     |]) -- clock_t
+  , ([ty| libc::time_t      |], [t| CTime      |]) -- time_t
+  , ([ty| libc::useconds_t  |], [t| CUSeconds  |]) -- useconds_t
+  , ([ty| libc::suseconds_t |], [t| CSUSeconds |]) -- suseconds_t
+  , ([ty| libc::c_float     |], [t| CFloat     |]) -- float
+  , ([ty| libc::c_double    |], [t| CDouble    |]) -- double
+  , ([ty| libc::FILE        |], [t| CFile      |]) -- FILE
+  , ([ty| libc::fpos_t      |], [t| CFpos      |]) -- fpos_t
   ]
 
--- | Basic Haskell and Rust types.
+-- | Basic numeric (and similar) Haskell and Rust types.
 --
--- TODO: Expand this
+-- There should be no conversion required here as these should have identical
+-- memory layouts.
 basic :: Context
 basic = mkContext
   [ ([ty| bool  |], [t| Bool    |])
+  , ([ty| char  |], [t| Char    |]) -- 4 bytes
   , ([ty| i8    |], [t| Int8    |])
   , ([ty| i16   |], [t| Int16   |])
   , ([ty| i32   |], [t| Int32   |])
@@ -120,26 +140,34 @@ basic = mkContext
   , ([ty| ()    |], [t| ()      |])
   ]
 
--- | Function pointers.
 functions :: Context
 functions = Context [ rule ]
   where
 
   rule :: RType -> Context -> First (Q HType)
-  rule (BareFn _ C _ (FnDecl args retTy False _) _) context = do
 
+  rule (BareFn _ C _ (FnDecl args retTy False _) _) context = do
     args' <- for args $ \arg -> do
-                Arg _ argTy _ <- pure arg
-                lookupTypeInContext argTy context
+               Arg _ argTy _ <- pure arg
+               lookupTypeInContext argTy context
 
     retTy' <- case retTy of
                 Just t -> lookupTypeInContext t context
-                Nothing -> pure [t| () |]
-    
-    let hFunTy = foldl1 (\l r -> [t| $l -> $r |]) (args' ++ [ retTy' ])
+                Nothing -> pure [t| IO () |]
+
+    let hFunTy = foldr (\l r -> [t| $l -> $r |]) retTy' args'
     let hFunPtr = [t| FunPtr $hFunTy |]
 
     pure hFunPtr
-  
+
   rule _ _ = mempty
 
+toFunPtr :: Q HType -> Q Exp
+toFunPtr hTy = do
+  -- Generate FFI
+  mkFun <- newName . show =<< newName "to_fun_ptr" -- Make a name to thread through Haskell/Rust (see Trac #13054)
+  dec <- forImpD CCall Safe "wrapper" mkFun [t| $hTy -> IO (FunPtr $hTy) |]
+  addTopDecls [dec]
+  
+  -- Call FFI
+  pure (VarE mkFun)

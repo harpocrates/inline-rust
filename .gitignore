@@ -1,11 +1,16 @@
 # Cabal related
 .cabal-sandbox
 cabal.sandbox.config
+cabal.project.local
 dist/
+dist-newstyle/
 
 # Stack related files
 .stack-work/
 stack.yaml
+
+# inline-rust related
+.inline-rust-quasi
 
 # Other
 **/*.o

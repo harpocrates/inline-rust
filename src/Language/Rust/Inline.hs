@@ -11,6 +11,10 @@ Portability : GHC
 {-# LANGUAGE TemplateHaskell #-}
 
 module Language.Rust.Inline (
+  -- * Overview
+  --
+  -- $overview
+  --
   -- * Quasiquoters
   --
   -- $quasiquoters
@@ -45,6 +49,7 @@ module Language.Rust.Inline (
   basic,
   libc,
   functions,
+  toFunPtr,
 
   -- * Top-level Rust items
   externCrate,
@@ -62,18 +67,20 @@ import Control.Monad                           ( void )
 import Data.List                               ( intercalate )
 import Data.Traversable                        ( for )
 
--- This module provides the facility for dropping in bits of Rust code into your
--- Haskell project. 
+-- $overview
 --
--- == How it works
+-- This module provides the facility for dropping in bits of Rust code into your
+-- Haskell project.
+--
+-- ** How it works
 --
 -- This works by the magic of Template Haskell. In a nutshell, for every Haskell
 -- source with a Rust quasiquote in it, a Rust source file is generated. Into
 -- this file are added
 -- 
---   * all top-level Rust quasiquotes (contents are added in as-is)
+--   - all top-level Rust quasiquotes (contents are added in as-is)
 --
---   * functions for all expression-level quasiquotes (function arguments
+--   - functions for all expression-level quasiquotes (function arguments
 --     correspond to referenced Haskell variables)
 --
 -- On the Haskell side, every expression quasiquote generates an FFI import
@@ -244,7 +251,7 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
   addTopDecls [ffiImport]
 
   -- Generate the Haskell FFI call
-  haskArgsE <- for rustArgs $ \(argStr, _) -> do 
+  haskArgsE <- for rustArgs $ \(argStr, _) -> do
                  arg <- lookupValueName argStr
                  case arg of
                    Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
@@ -262,6 +269,5 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
 
   -- Return the Haskell call to the FFI import
   pure haskCall
-
 
 

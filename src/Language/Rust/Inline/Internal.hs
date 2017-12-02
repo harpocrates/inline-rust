@@ -108,6 +108,15 @@ getType rustType = do
   context <- getContext <$> initModuleState Nothing
   getTypeInContext rustType context
 
+-- | Error message to display when `cargo`/`rustc` fail to compile the module's
+-- Rust file. Unfortunately, [errors reported by TH are always followed by the
+-- piece of error code][0]. In this case, that ends up being the top of the file.
+--
+-- TODO: is there a way to avoid this?
+--
+-- [0]: https://stackoverflow.com/questions/47598270/whole-file-template-haskell-error
+rustcErrMsg :: String
+rustcErrMsg = "Rust source file associated with this module failed to compile"
 
 -- | Add an extern crate dependency to this module. This is equivalent to
 -- adding `crate_name = "version"` to a Rust project's `Cargo.toml` file.
@@ -142,7 +151,7 @@ addForeignRustFile rustcArgs rustSrc = do
   let rustcAllArgs = rustcArgs ++ [ fpIn, "-o", fpOut ]
   ec <- runIO $ spawnProcess "rustc" rustcAllArgs >>= waitForProcess
   if ec /= ExitSuccess
-    then reportError "Rust source in quasiquote failed to compile."
+    then reportError rustcErrMsg
     else -- Link in the object
          addForeignFilePath RawObject fpOut
 
@@ -189,7 +198,7 @@ addForeignRustFile' dir rustcArgs rustSrc dependencies = do
 
   ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
   if (ec /= ExitSuccess)
-    then reportError "Rust source in quasiquote failed to compile."
+    then reportError rustcErrMsg
     else do -- Move the library to a GHC temporary file
             rustLib' <- addTempFile "a"
             runIO $ renameFile rustLib rustLib'
