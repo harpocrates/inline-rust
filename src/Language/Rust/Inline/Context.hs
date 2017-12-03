@@ -16,7 +16,7 @@ module Language.Rust.Inline.Context where
 
 import Language.Rust.Inline.Pretty ( renderType )
 
-import Language.Rust.Syntax        ( Ty(BareFn), Abi(..), FnDecl(..), Arg(..) )
+import Language.Rust.Syntax        ( Ty(BareFn, Ptr), Abi(..), FnDecl(..), Arg(..) )
 import Language.Rust.Quote         ( ty )
 
 import Language.Haskell.TH 
@@ -30,8 +30,14 @@ import Data.Traversable            ( for )
 
 import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
-import Foreign.Ptr                 ( IntPtr, WordPtr, FunPtr )
+import Foreign.Ptr                 ( Ptr, FunPtr, plusPtr )
+import Foreign.ForeignPtr          ( withForeignPtr )
+import Foreign.Storable            ( Storable )
 import Foreign.C.Types             -- pretty much every type here is used
+
+import Data.ByteString.Internal    ( ByteString(..) )
+import Data.Array.Storable         ( StorableArray, Ix, withStorableArray,
+                                     getBounds )
 
 -- Easier on the eyes
 type RType = Ty ()
@@ -123,7 +129,7 @@ libc = mkContext
 -- memory layouts.
 basic :: Context
 basic = mkContext
-  [ ([ty| bool  |], [t| Bool    |])
+  [ ([ty| bool  |], [t| Word8   |])
   , ([ty| char  |], [t| Char    |]) -- 4 bytes
   , ([ty| i8    |], [t| Int8    |])
   , ([ty| i16   |], [t| Int16   |])
@@ -135,18 +141,28 @@ basic = mkContext
   , ([ty| u64   |], [t| Word64  |])
   , ([ty| f32   |], [t| Float   |])
   , ([ty| f64   |], [t| Double  |])
-  , ([ty| isize |], [t| IntPtr  |]) 
-  , ([ty| usize |], [t| WordPtr |])
+  , ([ty| isize |], [t| Int     |])
+  , ([ty| usize |], [t| Word    |])
   , ([ty| ()    |], [t| ()      |])
   ]
 
+-- | Haskell pointers map onto Rust pointers. Note that unlike Rust, Haskell
+-- doesn't really distinguish between pointers pointing to immutable memory from
+-- those pointing to to mutable memory, so it is up to the user to enforce this.
+pointers :: Context
+pointers = Context [ rule ]
+  where
+  rule pt context = do
+    Ptr _ t _ <- pure pt
+    t' <- lookupTypeInContext t context
+    pure [t| Ptr $t' |]
+  
+-- | See 'FunPtr'  
 functions :: Context
 functions = Context [ rule ]
   where
-
-  rule :: RType -> Context -> First (Q HType)
-
-  rule (BareFn _ C _ (FnDecl args retTy False _) _) context = do
+  rule ft context = do
+    BareFn _ C _ (FnDecl args retTy False _) _ <- pure ft
     args' <- for args $ \arg -> do
                Arg _ argTy _ <- pure arg
                lookupTypeInContext argTy context
@@ -160,8 +176,6 @@ functions = Context [ rule ]
 
     pure hFunPtr
 
-  rule _ _ = mempty
-
 toFunPtr :: Q HType -> Q Exp
 toFunPtr hTy = do
   -- Generate FFI
@@ -171,3 +185,11 @@ toFunPtr hTy = do
   
   -- Call FFI
   pure (VarE mkFun)
+
+
+withByteString :: ByteString -> (Ptr Word8 -> Word -> IO a) -> IO a
+withByteString (PS ptr off len) cont = withForeignPtr ptr go
+  where go ptr' = cont (ptr' `plusPtr` off) (fromIntegral len)
+
+withArray :: (Storable a, Ix i) => StorableArray i a -> (Ptr a -> (i, i) -> IO b) -> IO b
+withArray arr cont = withStorableArray arr (\ptr -> cont ptr =<< getBounds arr)

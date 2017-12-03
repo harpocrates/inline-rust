@@ -49,6 +49,9 @@ module Language.Rust.Inline (
   basic,
   libc,
   functions,
+  pointers,
+  withArray,
+  withByteString,
   toFunPtr,
 
   -- * Top-level Rust items
