@@ -14,6 +14,7 @@ module Language.Rust.Inline.Pretty (
 ) where
 
 import Language.Rust.Pretty                    ( Pretty(..) )
+import Language.Rust.Data.Position             ( Spanned(..) )
 import Language.Rust.Syntax                    ( Ty, Token(..), TokenTree(..), TokenStream(..) )
 
 import Data.Text.Prettyprint.Doc               ( layoutPretty, defaultLayoutOptions )
@@ -28,5 +29,5 @@ renderType :: Ty a -> String
 renderType = render
 
 -- | Render a sequence of Rust 'Token's into a 'String'.
-renderTokens :: [Token] -> String
-renderTokens = render . (Stream . map (Tree . Token mempty))
+renderTokens :: [Spanned Token] -> String
+renderTokens toks = render (Stream [ Tree (Token t s) |  Spanned s t <- toks ])

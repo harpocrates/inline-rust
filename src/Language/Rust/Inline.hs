@@ -50,7 +50,7 @@ module Language.Rust.Inline (
   libc,
   functions,
   pointers,
-  withArray,
+  withStorableArrayLen,
   withByteString,
   toFunPtr,
 

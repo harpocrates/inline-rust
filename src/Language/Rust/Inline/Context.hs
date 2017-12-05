@@ -121,6 +121,14 @@ libc = mkContext
   , ([ty| libc::c_double    |], [t| CDouble    |]) -- double
   , ([ty| libc::FILE        |], [t| CFile      |]) -- FILE
   , ([ty| libc::fpos_t      |], [t| CFpos      |]) -- fpos_t
+  , ([ty| libc::int8_t      |], [t| Int8       |]) -- int8_t
+  , ([ty| libc::int16_t     |], [t| Int16      |]) -- int16_t
+  , ([ty| libc::int32_t     |], [t| Int32      |]) -- int32_t
+  , ([ty| libc::int64_t     |], [t| Int64      |]) -- int64_t
+  , ([ty| libc::uint8_t     |], [t| Word8      |]) -- uint8_t
+  , ([ty| libc::uint16_t    |], [t| Word16     |]) -- uint16_t
+  , ([ty| libc::uint32_t    |], [t| Word32     |]) -- uint32_t
+  , ([ty| libc::uint64_t    |], [t| Word64     |]) -- uint64_t
   ]
 
 -- | Basic numeric (and similar) Haskell and Rust types.
@@ -191,5 +199,7 @@ withByteString :: ByteString -> (Ptr Word8 -> Word -> IO a) -> IO a
 withByteString (PS ptr off len) cont = withForeignPtr ptr go
   where go ptr' = cont (ptr' `plusPtr` off) (fromIntegral len)
 
-withArray :: (Storable a, Ix i) => StorableArray i a -> (Ptr a -> (i, i) -> IO b) -> IO b
-withArray arr cont = withStorableArray arr (\ptr -> cont ptr =<< getBounds arr)
+withStorableArrayLen :: (Storable a, Ix i) => StorableArray i a
+                                           -> (Ptr a -> (i, i) -> IO b)
+                                           -> IO b
+withStorableArrayLen arr cont = withStorableArray arr (\ptr -> cont ptr =<< getBounds arr)

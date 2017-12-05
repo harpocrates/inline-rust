@@ -25,7 +25,7 @@ main = do
   print $ multipleOfThree "100101"                   -- 37      = 1 (mod 3)
   print $ multipleOfThree "101100101001010101111"    -- 1462959 = 0 (mod 3)
 
--- | Sort a storable array
+-- | Check if a bytestring fits a regular expression
 multipleOfThree :: ByteString -> Bool
 multipleOfThree input = unsafeLocalState $ withByteString input $ \ptr len -> do
   out <- [rustIO|

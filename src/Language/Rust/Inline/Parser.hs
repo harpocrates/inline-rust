@@ -22,7 +22,7 @@ import Language.Haskell.TH
 -- in the form of `$(<ident>: <ty>)`.
 data RustQuasiquoteParse = QQParse
   { ty :: Ty Span                     -- ^ leading type
-  , body :: [Token]                   -- ^ body tokens, with `$(<ident>: <ty>)`
+  , body :: [Spanned Token]           -- ^ body tokens, with `$(<ident>: <ty>)`
                                       -- pairs replaced by just `<ident>`
   , variables :: [(String, Ty Span)]  -- ^ `$(<ident>: <ty>)` args to escape
   } deriving (Show)
@@ -53,12 +53,12 @@ parseQQ input = case execParser lexer stream initPos of
   -- While in the body phase, keep going until there are no more tokens, or you hit '$(<ident> :'
   go (Body ty' body' vars)      []                                   = pure (QQParse ty' (reverse body') vars)
   go (Body ty' body' vars)      (Spanned Dollar _ : Spanned (OpenDelim Paren) _ : Spanned (IdentTok i) _ : Spanned Colon _ : rest) = go (Escape ty' body' vars 1 i []) rest
-  go (Body ty' body' vars)      (tok                                                                                       : rest) = go (Body ty' (unspan tok : body') vars) rest
+  go (Body ty' body' vars)      (tok                                                                                       : rest) = go (Body ty' (tok : body') vars) rest
   -- While in the escape phase, keep going until you balance out the parens
   go (Escape _   _    _    _ _ _     ) []   = fail "Ran out of input while parsing variable escape (did you forget a closing paren?)"
   go (Escape ty' body' vars p i tyToks) ( tok@(Spanned (CloseDelim Paren) _) : rest)
     | p - 1 > 0 = go (Escape ty' body' vars (p - 1) i (tok : tyToks)) rest
-    | otherwise = either (fail . snd) (\ty'' -> go (Body ty' (IdentTok i : body') ((show i, ty'') : vars)) rest) (parseFromToks tyToks)
+    | otherwise = either (fail . snd) (\ty'' -> go (Body ty' (pure (IdentTok i) : body') ((show i, ty'') : vars)) rest) (parseFromToks tyToks)
   go (Escape ty' body' vars p i tyToks) ( tok@(Spanned (OpenDelim Paren) _) : rest) = go (Escape ty' body' vars (p + 1) i (tok : tyToks)) rest
   go (Escape ty' body' vars p i tyToks) ( tok : rest) = go (Escape ty' body' vars p i (tok : tyToks)) rest
 
@@ -73,12 +73,12 @@ data ProcessState
 
   | Body                   -- ^ Parsing the body...
       (Ty Span)            -- ^ Parsed leading type
-      [Token]              -- ^ Tokens so far in the body
+      [Spanned Token]      -- ^ Tokens so far in the body
       [(String, Ty Span)]  -- ^ Escape arguments so far in the body
 
   | Escape                 -- ^ Parsing an escape argument in the body...
       (Ty Span)            -- ^ Parsed leading type
-      [Token]              -- ^ Tokens so far in the body
+      [Spanned Token]      -- ^ Tokens so far in the body
       [(String, Ty Span)]  -- ^ Escape arguments so far in the body
       Int                  -- ^ Unclosed open parens (if 0, go back to 'Body')
       Ident                -- ^ Escape argument identifier name
