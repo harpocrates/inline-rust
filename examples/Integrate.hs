@@ -3,11 +3,7 @@
 module Main where
 
 import Language.Rust.Inline
-import Foreign.Marshal.Unsafe
-import Foreign.Ptr
-
 import Data.Int (Int32, Int64)
-
 
 setContext (basic <> functions)
 externCrate "rayon" "0.9"
@@ -22,22 +18,20 @@ main = do
 
 -- | Take a double integral
 integrate :: (Double, Double) -> (Double -> Double) -> Int32 -> Double
-integrate (lo, hi) func n = unsafeLocalState $ do
-  func1 <- $(toFunPtr [t| Double -> Double |]) func
-  res <- [rustIO|
-          f64 {
-                 let f = $( func1: extern "C" fn(f64) -> f64 );
-                 let delta = ( $(hi: f64) - $(lo: f64) ) / $(n: i32) as f64;
-                 
-                 (0..n)
-                   .into_par_iter()
-                   .map(|i| {
-                     let a = i as f64 * delta;
-                     delta * (f(a) + f(a + delta)) / 2f64
-                   })
-                   .sum()
-          }
-         |]
-  freeHaskellFunPtr func1
-  pure res
+integrate (lo, hi) func n = unsafeLocalState $
+  $(withFunPtr [t| Double -> Double |]) func $ \func1 ->
+    [rustIO|
+     f64 {
+            let f = $( func1: extern "C" fn(f64) -> f64 );
+            let delta = ( $(hi: f64) - $(lo: f64) ) / $(n: i32) as f64;
+
+            (0..n)
+              .into_par_iter()
+              .map(|i| {
+                let a = i as f64 * delta;
+                delta * (f(a) + f(a + delta)) / 2f64
+              })
+              .sum()
+     }
+    |]
 

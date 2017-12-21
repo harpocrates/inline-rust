@@ -20,7 +20,6 @@ import Language.Rust.Syntax        ( Ty(BareFn, Ptr), Abi(..), FnDecl(..), Arg(.
 import Language.Rust.Quote         ( ty )
 
 import Language.Haskell.TH 
-import Language.Haskell.TH.Syntax  ( addTopDecls ) 
 
 import Data.Semigroup              ( Semigroup )
 import Data.Monoid                 ( First(..) )
@@ -30,14 +29,8 @@ import Data.Traversable            ( for )
 
 import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
-import Foreign.Ptr                 ( Ptr, FunPtr, plusPtr )
-import Foreign.ForeignPtr          ( withForeignPtr )
-import Foreign.Storable            ( Storable )
+import Foreign.Ptr                 ( Ptr, FunPtr )
 import Foreign.C.Types             -- pretty much every type here is used
-
-import Data.ByteString.Internal    ( ByteString(..) )
-import Data.Array.Storable         ( StorableArray, Ix, withStorableArray,
-                                     getBounds )
 
 -- Easier on the eyes
 type RType = Ty ()
@@ -86,6 +79,8 @@ mkContext = Context . map fits
 singleton :: Ty a -> Q HType -> Context
 singleton rts qht = mkContext [(rts, qht)]
 
+
+-- * Some handy contexts
 
 -- | Types defined in 'Foreign.C.Types' and the 'libc' crate.
 --
@@ -165,7 +160,13 @@ pointers = Context [ rule ]
     t' <- lookupTypeInContext t context
     pure [t| Ptr $t' |]
   
--- | See 'FunPtr'  
+-- | This maps a Rust function type into the corresponding 'FunPtr' wrapped
+-- Haskell function type.
+--
+-- Note that as a user, you are still responsible for marshalling values of
+-- type 'FunPtr'. The reason for this is simple: the GHC runtime has no way of
+-- automatically detecting when a pointer to a function is no longer present on
+-- the Rust side.
 functions :: Context
 functions = Context [ rule ]
   where
@@ -184,22 +185,3 @@ functions = Context [ rule ]
 
     pure hFunPtr
 
-toFunPtr :: Q HType -> Q Exp
-toFunPtr hTy = do
-  -- Generate FFI
-  mkFun <- newName . show =<< newName "to_fun_ptr" -- Make a name to thread through Haskell/Rust (see Trac #13054)
-  dec <- forImpD CCall Safe "wrapper" mkFun [t| $hTy -> IO (FunPtr $hTy) |]
-  addTopDecls [dec]
-  
-  -- Call FFI
-  pure (VarE mkFun)
-
-
-withByteString :: ByteString -> (Ptr Word8 -> Word -> IO a) -> IO a
-withByteString (PS ptr off len) cont = withForeignPtr ptr go
-  where go ptr' = cont (ptr' `plusPtr` off) (fromIntegral len)
-
-withStorableArrayLen :: (Storable a, Ix i) => StorableArray i a
-                                           -> (Ptr a -> (i, i) -> IO b)
-                                           -> IO b
-withStorableArrayLen arr cont = withStorableArray arr (\ptr -> cont ptr =<< getBounds arr)

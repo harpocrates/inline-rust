@@ -50,9 +50,19 @@ module Language.Rust.Inline (
   libc,
   functions,
   pointers,
+  -- ** Marshalling
+  with,
+  alloca,
+  free,
+  new,
+  withFunPtr,
+  newFunPtr,
+  freeHaskellFunPtr,
+  withArrayLen,
   withStorableArrayLen,
+  newArray,
   withByteString,
-  toFunPtr,
+  unsafeLocalState,
 
   -- * Top-level Rust items
   externCrate,
@@ -60,15 +70,23 @@ module Language.Rust.Inline (
 
 import Language.Rust.Inline.Context 
 import Language.Rust.Inline.Internal
+import Language.Rust.Inline.Marshal
 import Language.Rust.Inline.Parser
 import Language.Rust.Inline.Pretty
 
 import Language.Haskell.TH.Syntax
-import Language.Haskell.TH.Quote               ( QuasiQuoter(..) )
+import Language.Haskell.TH.Quote             ( QuasiQuoter(..) )
 
-import Control.Monad                           ( void )
-import Data.List                               ( intercalate )
-import Data.Traversable                        ( for )
+
+import Foreign.Marshal.Utils                 ( with, new )
+import Foreign.Marshal.Alloc                 ( alloca, free ) 
+import Foreign.Marshal.Array                 ( withArrayLen, newArray )
+import Foreign.Marshal.Unsafe                ( unsafeLocalState )
+import Foreign.Ptr                           ( freeHaskellFunPtr )
+
+import Control.Monad                         ( void )
+import Data.List                             ( intercalate )
+import Data.Traversable                      ( for )
 
 -- $overview
 --
