@@ -30,15 +30,10 @@ GHCi, make sure to pass in `-fobject-code`.
 
 ## Building
 
-This currently depends on
-
-  * A [special branch of GHC][0] ([Phabricator ticket][1])
-  * My soon-to-be-released [`language-rust`][2] package
-  
-You should be able to do something like:
+This currently depends on a [special branch of GHC][0] ([Phabricator ticket][1]). You should be
+able to do something like:
 
     $ git clone https://github.com/harpocrates/ghc.git
-    $ git clone https://github.com/harpocrates/language-rust.git
     $ git clone https://github.com/harpocrates/inline-rust.git
     
     $ cd ghc
@@ -47,8 +42,6 @@ You should be able to do something like:
     
     $ cd ../inline-rust
     inline-rust$ cabal sandbox init
-    inline-rust$ cabal sandbox add-source ../language-rust
-    inline-rust$ cabal install --only-dependencies -w ../ghc/inplace/bin/ghc-stage2  # put full GHC path
     inline-rust$ cabal install -w ../ghc/inplace/bin/ghc-stage2                      # put full GHC path
 
 ## Bugs

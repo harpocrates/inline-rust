@@ -15,7 +15,8 @@ import Language.Rust.Inline.Pretty ( renderType )
 
 import Language.Rust.Syntax        ( Token(..), Delim(..), Ty )
 import Language.Rust.Parser
-import Language.Rust.Data.Position ( Position, Span, Spanned(..) )
+import Language.Rust.Data.Position ( Spanned(..) )
+import Language.Rust.Data.Ident    ( Ident(..) )
 
 import Language.Haskell.TH         ( Q )
 
@@ -59,7 +60,7 @@ parseQQ input = do
   -- Lex the quasiquote tokens
   rest1 <-
     case execParser lexer stream initPos of
-      Left (_, msg) -> fail msg
+      Left (ParseFail _ msg) -> fail msg
       Right parsed -> pure parsed
 
   -- Split off the leading type's tokens
@@ -71,7 +72,7 @@ parseQQ input = do
   -- Parse leading type
   leadingTy <-
     case parseFromToks tyToks of
-      Left (_, msg) -> fail msg
+      Left (ParseFail _ msg) -> fail msg
       Right parsed -> pure parsed
 
   -- Parse body of quasiquote
@@ -95,7 +96,7 @@ parseQQ input = do
             (t1, rest3) <- parseEscape [] 1 rest2
 
             -- Add it to 'vars' if it isn't a duplicate
-            let i' = show i
+            let i' = name i
             let dupMsg t2 = concat [ "Variable `", i', ": ", renderType t1
                                     , "' has already been given type `"
                                     , renderType t2, "'"
@@ -120,12 +121,12 @@ parseQQ input = do
             | closeParen tok && p > 1 -> parseEscape (tok : toks) (p-1) rest2
             | not (closeParen tok)    -> parseEscape (tok : toks) p     rest2
             | otherwise -> case parseFromToks (reverse toks) of
-                             Left (_,msg) -> fail msg
-                             Right parsed -> pure (parsed, rest2)
+                             Left (ParseFail _ msg) -> fail msg
+                             Right parsed           -> pure (parsed, rest2)
 
 
 -- | Utility function for parsing AST structures from listf of spanned tokens
-parseFromToks :: Parse a => [SpTok] -> Either (Position, String) a
+parseFromToks :: Parse a => [SpTok] -> Either ParseFail a
 parseFromToks toks = execParserTokens parser (reverse toks) initPos
 
 -- | Identifies an open brace token
