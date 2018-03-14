@@ -127,7 +127,7 @@ parseQQ input = do
 
 -- | Utility function for parsing AST structures from listf of spanned tokens
 parseFromToks :: Parse a => [SpTok] -> Either ParseFail a
-parseFromToks toks = execParserTokens parser (reverse toks) initPos
+parseFromToks toks = execParserTokens parser toks initPos
 
 -- | Identifies an open brace token
 openBrace :: SpTok -> Bool

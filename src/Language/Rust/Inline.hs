@@ -43,8 +43,8 @@ module Language.Rust.Inline (
   setContext,
   singleton,
   mkContext,
-  lookupTypeInContext,
-  getTypeInContext,
+  lookupRTypeInContext,
+  getRTypeInContext,
   -- ** Built-in contexts
   basic,
   libc,
@@ -254,7 +254,7 @@ rustQuasiQuoter safety isPure supportDecs = QuasiQuoter { quoteExp = expQuoter
 --       right Haskell arguments.
 --
 processQQ :: Safety -> Bool -> RustQuasiquoteParse -> Q Exp
-processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
+processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
 
   -- Make a name to thread through Haskell/Rust (see Trac #13054)
   qqName' <- newName "quasiquote"
@@ -263,8 +263,9 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
 
   -- Find out what the corresponding Haskell representations are for the
   -- argument and return types
-  haskRet <- getType (void rustRet)
-  haskArgs <- traverse (\(_, rustArg) -> getType (void rustArg)) rustArgs
+  let (rustArgNames, rustArgs) = unzip rustNamedArgs 
+  (haskRet, reprCRet) <- getRType (void rustRet)
+  (haskArgs, reprCArgs) <- unzip <$> traverse (getRType . void) rustArgs
 
   -- Generate the Haskell FFI import declaration and emit it
   haskSig <- foldr (\l r -> [t| $(pure l) -> $r |])
@@ -274,20 +275,34 @@ processQQ safety isPure (QQParse rustRet rustBody rustArgs) = do
   addTopDecls [ffiImport]
 
   -- Generate the Haskell FFI call
-  haskArgsE <- for rustArgs $ \(argStr, _) -> do
+  haskArgsE <- for rustArgNames $ \argStr -> do
                  arg <- lookupValueName argStr
                  case arg of
                    Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
                    Just argName -> pure (VarE argName)
   let haskCall = foldl AppE (VarE qqName) haskArgsE
 
-  -- Generate the Rust function
+  -- Generate the Rust function arguments and the converted arguments
+  let (rustArgs', rustConvertedArgs) = unzip $ zipWith mergeArgs rustArgs reprCArgs
+      (rustRet', rustConvertedRet) = mergeArgs rustRet reprCRet
+      
+     -- mergeArgs :: Ty Span -> Maybe RType -> (Ty Span, Ty Span)
+      mergeArgs t Nothing       = (t, t)
+      mergeArgs t (Just tInter) = (fmap (const mempty) tInter, t)
+  
+  
+  -- Generate the Rust function.
   void . emitCodeBlock . unlines $
     [ "#[no_mangle]"
     , "pub extern \"C\" fn " ++ qqStrName ++ "("
-    , intercalate ", " (map (\(s,t) -> s ++ ": " ++ renderType t) rustArgs)
-    , ") -> " ++ renderType rustRet
-    , renderTokens rustBody
+    , intercalate ", " [ s ++ ": " ++ renderType t | (s,t) <- zip rustArgNames rustArgs' ]
+    , ") -> " ++ renderType rustRet' ++ " {"
+    , unlines [ "  let " ++ s ++ ": " ++ renderType t ++ " = " ++ s ++ ".into();"
+              | (s,t) <- zip rustArgNames rustConvertedArgs
+              ]
+    , "  let out: " ++ renderType rustConvertedRet ++ " = " ++ renderTokens rustBody ++ ";"
+    , "  out.into()"
+    , "}"
     ]
 
   -- Return the Haskell call to the FFI import
