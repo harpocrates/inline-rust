@@ -13,7 +13,8 @@ module Language.Rust.Inline.Internal (
   emitCodeBlock,
   externCrate,
   setContext,
-  getType,
+  getRType,
+  getHType,
   addForeignRustFile,
   addForeignRustFile',
 ) where
@@ -44,8 +45,8 @@ data ModuleState = ModuleState
 
 -- | Get the 'ModuleState' of the current module, initializing it if it isn't
 -- already initialized.
-initModuleState :: Maybe Context -- ^ how to initialize the context (default is
-                                 -- 'basic') if uninitialized.
+initModuleState :: Maybe (Q Context) -- ^ how to initialize the context (default is
+                                     -- 'basic') if uninitialized.
                 -> Q ModuleState
 initModuleState contextMaybe = do
   moduleStateMaybe <- getQ
@@ -71,9 +72,10 @@ initModuleState contextMaybe = do
                   runIO $ createDirectoryIfMissing True dir
                   addForeignRustFile' dir [] code' deps
 
+      context <- fromMaybe basic contextMaybe 
       
       -- add a module state
-      let m = ModuleState { getContext = fromMaybe basic contextMaybe
+      let m = ModuleState { getContext = context 
                           , codeBlocks = []
                           , crates = []
                           }
@@ -93,7 +95,7 @@ emitCodeBlock code = do
 -- be called before any of the other TH functions in this module.
 --
 -- >  setContext (basic <> libc)
-setContext :: Context -> Q [Dec]
+setContext :: Q Context -> Q [Dec]
 setContext context = do
   moduleState :: Maybe ModuleState <- getQ
   case moduleState of
@@ -103,10 +105,16 @@ setContext context = do
 
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
-getType :: RType -> Q HType
-getType rustType = do
+getRType :: RType -> Q (HType, Maybe RType)
+getRType rustType = do
   context <- getContext <$> initModuleState Nothing
-  getTypeInContext rustType context
+  let (qht, qrtOpt) = getRTypeInContext rustType context
+  (,) <$> qht <*> sequence qrtOpt
+
+getHType :: HType -> Q RType
+getHType haskType = do
+  context <- getContext <$> initModuleState Nothing
+  getHTypeInContext haskType context
 
 -- | Error message to display when `cargo`/`rustc` fail to compile the module's
 -- Rust file. Unfortunately, [errors reported by TH are always followed by the
