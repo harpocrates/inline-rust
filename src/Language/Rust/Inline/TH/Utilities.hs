@@ -7,20 +7,18 @@ Maintainer  : alec.theriault@gmail.com
 Stability   : experimental
 Portability : GHC
 -}
+{-# LANGUAGE RankNTypes #-}
 
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# OPTIONS_GHC -Wwarn #-}         -- TODO: GHC bug around "unused pattern binds" in splices
-                                   -- TODO: GHC bug around setting extensions from within TH
 module Language.Rust.Inline.TH.Utilities (
   getConstructors,
+  varName,
+  getAllVars,
 ) where
 
 import Language.Haskell.TH
-import Language.Haskell.TH.Syntax hiding (lift)
 
-import Data.Maybe                (fromMaybe)
+import Data.Maybe                ( fromMaybe )
+import Data.Data                 ( Data(..), Typeable, cast )
 
 
 -- | Given a fully applied type, decompose it into a list of constructors and
@@ -41,7 +39,7 @@ getConstructors ty = do
     case info of
       TyConI (DataD    _c _n tyvars _k cons _ds) -> pure (cons, tyvars)
       TyConI (NewtypeD _c _n tyvars _k con  _ds) -> pure ([con], tyvars)
-      _ -> fail "mkStorable: could not find simple type constructor"
+      _ -> fail "getConstructors: could not find simple type constructor"
 
   -- Get the fields
   let dict = zip (map varName tyvars) args
@@ -80,4 +78,16 @@ getSubCon dict (NormalC c ts)   = pure (c, [ subTy dict t | (_, t) <- ts ])
 getSubCon dict (RecC c ts)      = pure (c, [ subTy dict t | (_, _, t) <- ts ])
 getSubCon dict (InfixC t1 c t2) = pure (c, [ subTy dict t | (_, t) <- [t1,t2] ])
 getSubCon _    _ = fail "processCon: unsupported constructor type"
+
+-- | Extract all of the type variables from a type
+getAllVars :: Type -> [Name]
+getAllVars = collect getVar 
+  where
+  getVar :: Typeable a => a -> [Name]
+  getVar x = case cast x of
+               Just (VarT n) -> [n]
+               _ -> []
+
+  collect :: Data b => (forall a. Data a => a -> [r]) -> b -> [r]
+  collect f x = concat (f x : gmapQ (collect f) x)
 
