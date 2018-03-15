@@ -34,6 +34,7 @@ library
                        Language.Rust.Inline.Internal
                        Language.Rust.Inline.TH.Storable
                        Language.Rust.Inline.TH.Utilities
+                       Language.Rust.Inline.TH.ReprC
 
   other-extensions:    DeriveDataTypeable
                      , CPP
