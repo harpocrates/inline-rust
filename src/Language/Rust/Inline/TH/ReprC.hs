@@ -15,11 +15,12 @@ module Language.Rust.Inline.TH.ReprC where
 import Language.Rust.Inline.TH.Utilities
 import Language.Rust.Inline.Context
 
-import Language.Haskell.TH
+import Language.Haskell.TH hiding (Stmt, Match, WildP, Unsafe, LitP, Pat)
 import Language.Rust.Syntax
 import Language.Rust.Data.Ident ( Ident, mkIdent )
 
 import Data.Traversable ( for )
+import Data.List.NonEmpty ( NonEmpty(..) )
 
 -- | TODO mangle me
 freshIdent :: String -> Q Ident
@@ -45,6 +46,12 @@ mkPath i = Path False [ PathSegment i Nothing () ] ()
 mkPathTy :: Ident -> Ty ()
 mkPathTy i = PathTy Nothing (mkPath i) ()
 
+mkPathExpr :: Ident -> Expr ()
+mkPathExpr i = PathExpr [] Nothing (mkPath i) ()
+
+mkIdentPat :: Ident -> Pat ()
+mkIdentPat i = IdentP (ByValue Immutable) i Nothing ()
+
 -- | Make a generic path type (e.g. something like @Vec<T>@).
 mkGenPathTy :: Ident -> [Ty ()] -> Ty ()
 mkGenPathTy i g = PathTy Nothing (mkGenPath i g) ()
@@ -61,9 +68,20 @@ consBound bd (TyParam as i bds def x) = TyParam as i (bd : bds) def x
 copyBound :: TyParamBound ()
 copyBound = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkPath (mkIdent "Copy"))) ()) None ()
 
+-- | The @Into<T>@ type parameter bound.
+intoBound :: Ty () -> TyParamBound ()
+intoBound t = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkGenPath (mkIdent "Into") [t])) ()) None ()
+
 -- | Make simple generics from a list of type parameters.
 mkGenerics :: [TyParam ()] -> Generics ()
 mkGenerics ps = Generics [] ps (WhereClause [] ()) ()
+
+tyParam2Ty :: TyParam () -> Ty ()
+tyParam2Ty (TyParam [] i [] Nothing ()) = mkPathTy i
+tyParam2Ty _ = error "tyParam2Ty: could not convert type parameter to type"
+
+mkArm :: Pat () -> Expr () -> Arm ()
+mkArm p e = Arm [] (p :| []) Nothing e ()
 
 type TyVarDict = [(Name, TyParam ())]
 
@@ -93,18 +111,135 @@ mkReprC ctx ty = do
 
   case cons of
     [(_, tys)] -> do
-      (ty, i, item) <- mkStruct ctx' dict False n tys
+      (ty, (i, _), item) <- mkStruct ctx' dict False n tys
    
-      error "incomplete"
+      error "incomplete" -- TODO: make a context
     _ -> do
       (tys, is,     items) <- unzip3 <$> traverse (uncurry (mkStruct ctx' dict True)) cons
       (tyU, iUnion, itemU) <- mkUnion dict (mkName (nameBase n ++ "CUnion")) tys
       (tyE, iTagged, item) <- mkTagged ctx' dict (mkName (nameBase n ++ "C")) (mkPathTy (mkIdent "u8")) tyU
      
       (tyE, iEnum, iVars, itemE) <- mkEnum ctx' dict n cons
+
+      (impl1, impl2) <- mkFromImpls dict iTagged iUnion is iEnum iVars
       error "unimplemented" -- TODO two 'Into' symmetric impls
 
 
+mkFromImpls :: TyVarDict     -- ^ Mapping of Haskell type variables to Rust type parameters
+            -> Ident         -- ^ Tagged union name
+            -> Ident         -- ^ Union name
+            -> [(Ident,Int)] -- ^ Structs that are fields of union (and their arity)
+            -> Ident         -- ^ Enum name
+            -> [Ident]       -- ^ Enum variants
+            -> Q ( Item ()   --   Impl mapping #[repr(C)] tagged union into enum
+                 , Item ()   --   Impl mapping enum into tagged union
+                 )
+mkFromImpls dict
+            nTagged nUnion nStructs
+            nEnum nVariants = do
+  
+  let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
+      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> mkIdent "1") [] Nothing ())
+                        | (ht, TyParam _ i _ _ _) <- dict
+                        ]
+
+      -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
+      ts1BoundIntoT = zipWith consBound (map (intoBound . tyParam2Ty) ts) ts1
+
+      -- full parameters: @T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...@ 
+      fullImplBds = map (consBound copyBound) (ts ++ ts1BoundIntoT)
+
+      -- From<TaggedUnion<T1, U1, ...>>
+      fromTaggedUnion = mkFromTraitRef nTagged ts1
+
+      -- Enum<T, U, ...> and TaggedUnion<T1, U1, ...>
+      enumTy = mkGenPathTy nEnum (map tyParam2Ty ts)
+      taggedTy1 = mkGenPathTy nTagged (map tyParam2Ty ts1)
+  
+      flds = [ FieldPat Nothing (mkIdentPat (mkIdent "tag")) ()
+             , FieldPat Nothing (mkIdentPat (mkIdent "payload")) ()
+             ]
+      arms1 = [ mkArm pat body
+              | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
+              , let pat = LitP (Lit [] (Int Dec i Unsuffixed ()) ()) ()
+              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..]
+              , let exps = map ( (\y -> MethodCall [] y (mkIdent "into") Nothing [] ())
+                               . mkPathExpr
+                               . mkIdent
+                               . ('y' :)
+                               . show )
+                               [0..]
+              , let access = FieldAccess [] (mkPathExpr (mkIdent "payload")) (mkIdent ("v" ++ show i)) () 
+              , let stmts = [ Local (TupleStructP (mkPath s) vars Nothing ()) Nothing (Just access) [] ()
+                            , if n == 0
+                                then NoSemi (mkPathExpr s) ()
+                                else NoSemi (Call [] (mkPathExpr v) exps ()) ()
+                            ]
+              , let body = BlockExpr [] (Block stmts Unsafe ()) ()
+              ] ++ [ mkArm (WildP ()) (error "put a panic here") ]
+      body1 = [ Local (StructP (mkPath nTagged) flds False ())
+                      Nothing
+                      (Just (mkPathExpr (mkIdent "x")))
+                      []
+                      ()
+              , NoSemi (Match [] (mkPathExpr (mkIdent "tag")) arms1 ())
+                       ()
+              ]
+
+      -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
+      --   From<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
+      impl1 = Impl [] PublicV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just fromTaggedUnion)
+                   enumTy [mkFromFunc taggedTy1 enumTy body1] ()
+
+      -- From<Enum<T1, U1, ...>>
+      fromEnum = mkFromTraitRef nEnum ts1
+      
+      -- TaggedUnion<T, U, ...> and Enum<T1, U1, ...>
+      taggedTy = mkGenPathTy nTagged (map tyParam2Ty ts)
+      enumTy1 = mkGenPathTy nEnum (map tyParam2Ty ts1)
+
+      arms2 = [ mkArm pat body
+              | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
+              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..]
+              , let exps = map ( (\y -> MethodCall [] y (mkIdent "into") Nothing [] ())
+                               . mkPathExpr
+                               . mkIdent
+                               . ('y' :)
+                               . show )
+                               [0..]
+              , let pat = TupleStructP (mkPath v) vars Nothing ()
+              , let e = if n == 0
+                          then mkPathExpr s
+                          else Call [] (mkPathExpr s) exps ()
+              , let flds' = [ Field (mkIdent ('v' : show i)) (Just e) () ]
+              , let payload = Struct [] (mkPath nUnion) flds' Nothing ()
+              , let flds = [ Field (mkIdent "tag") (Just (Lit [] (Int Dec i Unsuffixed ()) ())) ()
+                           , Field (mkIdent "payload") (Just payload) ()
+                           ]
+              , let body = Struct [] (mkPath nTagged) flds Nothing ()
+              ]
+      body2 = [ NoSemi (Match [] (mkPathExpr (mkIdent "x")) arms2 ()) () ]
+
+      -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
+      --   From<Enum<T1, U1, ...> for TaggedUnion<T, U, ...> { ... }
+      impl2 = Impl [] PublicV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just fromEnum)
+                   taggedTy [mkFromFunc enumTy1 taggedTy body2] ()
+
+      
+  pure (impl1, impl2)
+  where
+    mkFromTraitRef :: Ident -> [TyParam ()] -> TraitRef ()
+    mkFromTraitRef n t = TraitRef (mkGenPath (mkIdent "From") [ mkGenPathTy n (map tyParam2Ty t) ])
+
+    mkFromFunc :: Ty () -> Ty () -> [Stmt ()] -> ImplItem ()
+    mkFromFunc argTy retTy body = let gen = mkGenerics []
+                                      arg = Arg (Just (mkIdentPat (mkIdent "x"))) argTy ()
+                                      decl = FnDecl [arg] (Just retTy) False ()
+                                      sig = MethodSig Normal NotConst Rust decl 
+                                      blk = Block body Normal ()
+                                  in MethodI [] PublicV Final (mkIdent "from") gen sig blk ()
 
 -- | Extend the context with the type variables in the given dictionary.
 extendCtx :: TyVarDict -> Context -> Q Context
@@ -226,15 +361,15 @@ mkTagged ctx dict n disc union = do
 -- struct SomeStruct<a: Copy>(i32, a);
 -- @
 --
-mkStruct :: Context     -- ^ current context (in order to lookup what Rust types corresponding to
-                        -- Haskell ones)
-         -> TyVarDict   -- ^ Mapping of Haskell type variables to Rust type parameters
-         -> Bool        -- ^ Enforce a 'Copy' constraint on type parameters
-         -> Name        -- ^ What name to give the struct
-         -> [Type]      -- ^ Fields of the struct
-         -> Q ( Ty ()   --   Output type
-              , Ident   --   Output name
-              , Item () --   Struct definition
+mkStruct :: Context          -- ^ current context (in order to lookup what Rust types corresponding to
+                             -- Haskell ones)
+         -> TyVarDict        -- ^ Mapping of Haskell type variables to Rust type parameters
+         -> Bool             -- ^ Enforce a 'Copy' constraint on type parameters
+         -> Name             -- ^ What name to give the struct
+         -> [Type]           -- ^ Fields of the struct
+         -> Q ( Ty ()        --   Output type
+              , (Ident, Int) --   Output name and arity
+              , Item ()      --   Struct definition
               )
 mkStruct ctx dict copy n tys = do
   var <- mkVariant ctx tys
@@ -248,7 +383,7 @@ mkStruct ctx dict copy n tys = do
       outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- copyPs ]
 
 
-  pure (outTy, itemN, struct)
+  pure (outTy, (itemN, length tys), struct)
 
 -- | Construct the variant data for struct fields.
 mkVariant :: Context -> [Type] -> Q (VariantData ())
