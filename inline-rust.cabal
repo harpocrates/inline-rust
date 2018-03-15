@@ -32,7 +32,8 @@ library
                        Language.Rust.Inline.Parser
                        Language.Rust.Inline.Pretty
                        Language.Rust.Inline.Internal
-                       Language.Rust.Inline.Storable.TH
+                       Language.Rust.Inline.TH.Storable
+                       Language.Rust.Inline.TH.Utilities
 
   other-extensions:    DeriveDataTypeable
                      , CPP

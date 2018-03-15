@@ -1,5 +1,5 @@
 {-|
-Module      : Language.Rust.Inline
+Module      : Language.Rust.Inline.TH.Storable
 Description : Generate Storable instances
 Copyright   : (c) Alec Theriault, 2018
 License     : BSD-style
@@ -12,16 +12,17 @@ Portability : GHC
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Wwarn #-}         -- TODO: GHC bug around "unused pattern binds" in splices
-                                   -- TODO: GHC bug around setting extensions from within TH
-module Language.Rust.Inline.Storable.TH (
+                                   -- TODO: GHC feature around setting extensions from within TH
+module Language.Rust.Inline.TH.Storable (
   mkStorable,
 ) where
+
+import Language.Rust.Inline.TH.Utilities
 
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax hiding (lift)
 import Control.Monad.Trans.State (StateT(..), get, put)
 import Control.Monad.Trans.Class (lift)
-import Data.Maybe                (fromMaybe)
 import Data.Traversable          (for)
 import Foreign.Ptr               (plusPtr, castPtr, Ptr)
 import Data.Word                 (Word8)
@@ -51,62 +52,12 @@ mkStorable tyq = do
       _ -> fail "mkStorable: malformed 'Storable' instance head"
 
   -- Get the type constructors name
-  (n,args) <- getTyCon ty'
-  info <- reify n
-
-  -- Get the constructors out
-  (cons, tyvars) <-
-    case info of
-      TyConI (DataD    _c _n tyvars _k cons _ds) -> pure (cons, tyvars)
-      TyConI (NewtypeD _c _n tyvars _k con  _ds) -> pure ([con], tyvars)
-      _ -> fail "mkStorable: could not find simple type constructor"
-
-  -- Get the fields
-  let dict = zip (map varName tyvars) args
-  cons' <- traverse (getSubCon dict) cons
+  (_,cons') <- getConstructors ty'
 
   -- Produce the instance
   methods <- processADT cons' 
   dec <- instanceD (pure ctx) (pure (AppT storable ty')) (map pure methods)
   pure [dec]
-
-
--- * General TH utilities
-
--- | Get the name of a type variable binder
-varName :: TyVarBndr -> Name
-varName (PlainTV n) = n
-varName (KindedTV n _) = n
-
--- | Apply a substitution (of type variable to type) to a type
-subTy :: [(Name, Type)] -> Type -> Type
-subTy dict (AppT t1 t2) = AppT (subTy dict t1) (subTy dict t2)
-subTy dict (VarT n) = fromMaybe (VarT n) $ lookup n dict
-subTy dict (InfixT t1 n t2) = InfixT (subTy dict t1) n (subTy dict t2)
-subTy dict (ParensT t) = ParensT (subTy dict t)
-subTy _    t = t
-
--- | Extract the type constructor of a type, along with the type arguments
-getTyCon :: Type -> Q (Name, [Type])
-getTyCon = fmap (\(n, argsRev) -> (n, reverse argsRev)) . go
-  where
-    go (ConT n) = pure (n, [])
-    go (AppT t1 t2) = fmap (\(n, args) -> (n, t2 : args)) (go t1)
-    go (InfixT t1 n t2) = pure (n, [t1, t2])
-    go (ParensT t) = go t
-    go _ = fail "getTyCon: could not find type constructor"
-  
--- | Extract the fields from a constructor, applying a substitution along the
--- way
-getSubCon :: [(Name, Type)] -> Con -> Q (Name, [Type])
-getSubCon dict (NormalC c ts)   = pure (c, [ subTy dict t | (_, t) <- ts ])
-getSubCon dict (RecC c ts)      = pure (c, [ subTy dict t | (_, _, t) <- ts ])
-getSubCon dict (InfixC t1 c t2) = pure (c, [ subTy dict t | (_, t) <- [t1,t2] ])
-getSubCon _    _ = fail "processCon: unsupported constructor type"
-
--- | Make a typed list. This function is like 'listE', but for 'TExp'.
-listTE :: [TExp a] -> TExp [a]
-listTE = TExp . ListE . map unType
 
 
 -- * Alignment
@@ -145,6 +96,10 @@ instance Monoid (Q Alignment) where
 
 -- | This is the state we will bundle along while visiting fields.
 type StructState = StateT Alignment Q
+
+-- | Make a typed list. This function is like 'listE', but for 'TExp'.
+listTE :: [TExp a] -> TExp [a]
+listTE = TExp . ListE . map unType
 
 
 -- * Peek and poke helper functions 
