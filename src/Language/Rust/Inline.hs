@@ -74,7 +74,7 @@ import Language.Rust.Inline.Internal
 import Language.Rust.Inline.Marshal
 import Language.Rust.Inline.Parser
 import Language.Rust.Inline.Pretty
-import Language.Rust.Inline.Storable.TH      ( mkStorable )
+import Language.Rust.Inline.TH.Storable      ( mkStorable )
 
 import Language.Haskell.TH.Syntax
 import Language.Haskell.TH.Quote             ( QuasiQuoter(..) )
