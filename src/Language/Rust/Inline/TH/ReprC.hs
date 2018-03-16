@@ -7,10 +7,12 @@ Maintainer  : alec.theriault@gmail.com
 Stability   : experimental
 Portability : GHC
 -}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-{-# OPTIONS_GHC -Wwarn #-}         -- TODO: GHC bug around "unused pattern binds" in splices
-                                   -- TODO: GHC bug around setting extensions from within TH
-module Language.Rust.Inline.TH.ReprC where
+module Language.Rust.Inline.TH.ReprC (
+  mkReprC
+) where
 
 import Language.Rust.Inline.TH.Utilities
 import Language.Rust.Inline.Context
@@ -18,7 +20,9 @@ import Language.Rust.Inline.Context
 import Language.Haskell.TH hiding (Stmt, Match, WildP, Unsafe, LitP, Pat)
 import Language.Rust.Syntax
 import Language.Rust.Data.Ident ( Ident, mkIdent )
+import qualified Language.Rust.Quote as R
 
+import Control.Monad    ( void )
 import Data.Traversable ( for )
 import Data.List.NonEmpty ( NonEmpty(..) )
 
@@ -28,19 +32,24 @@ freshIdent str = pure (mkIdent str)
 
 -- | The @#[derive(Copy,Clone)]@ attributes
 deriveCopyClone :: Attribute ()
-deriveCopyClone = undefined
+deriveCopyClone = void [R.attr| #[derive(Copy,Clone)] |]
 
 -- | The @#[repr(C)]@ attribute
 reprC :: Attribute ()
-reprC = undefined
+reprC = void [R.attr| #[repr(C)] |]
 
 -- | Make a generic path from an idenitifer
 mkGenPath :: Ident -> [Ty ()] -> Path ()
+mkGenPath i [] = Path False [ PathSegment i Nothing () ] ()
 mkGenPath i g = Path False [ PathSegment i (Just (AngleBracketed [] g [] ())) () ] ()
 
 -- | Make a path from a single identifier.
 mkPath :: Ident -> Path ()
 mkPath i = Path False [ PathSegment i Nothing () ] ()
+
+-- | Make a path from multiple identifiers.
+mkPath' :: [Ident] -> Path ()
+mkPath' is = Path False [ PathSegment i Nothing () | i <- is ] ()
 
 -- | Make a path type (e.g. something like @SomeStruct@).
 mkPathTy :: Ident -> Ty ()
@@ -48,6 +57,9 @@ mkPathTy i = PathTy Nothing (mkPath i) ()
 
 mkPathExpr :: Ident -> Expr ()
 mkPathExpr i = PathExpr [] Nothing (mkPath i) ()
+
+mkPathExpr' :: [Ident] -> Expr ()
+mkPathExpr' is = PathExpr [] Nothing (mkPath' is) ()
 
 mkIdentPat :: Ident -> Pat ()
 mkIdentPat i = IdentP (ByValue Immutable) i Nothing ()
@@ -66,11 +78,11 @@ consBound bd (TyParam as i bds def x) = TyParam as i (bd : bds) def x
 
 -- | The @Copy@ type parameter bound.
 copyBound :: TyParamBound ()
-copyBound = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkPath (mkIdent "Copy"))) ()) None ()
+copyBound = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkPath "Copy")) ()) None ()
 
 -- | The @Into<T>@ type parameter bound.
 intoBound :: Ty () -> TyParamBound ()
-intoBound t = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkGenPath (mkIdent "Into") [t])) ()) None ()
+intoBound t = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkGenPath "Into" [t])) ()) None ()
 
 -- | Make simple generics from a list of type parameters.
 mkGenerics :: [TyParam ()] -> Generics ()
@@ -86,18 +98,21 @@ mkArm p e = Arm [] (p :| []) Nothing e ()
 type TyVarDict = [(Name, TyParam ())]
 
 
-mkReprC :: Context     -- ^ current context (in order to lookup what Rust types corresponding to
-                       -- Haskell ones)
-        -> Type        -- ^ Haskell type to convert
-        -> Q ()          -- TODO
+mkReprC :: Context         -- ^ current context (in order to lookup what Rust types corresponding to
+                           -- Haskell ones)
+        -> Type            -- ^ Haskell type to convert
+        -> Q ( Ident       --   Name of Rust enum
+             , Maybe Ident --   Name of #[repr(C)] tagged union  
+             , [Item ()]   --   Support type definitions and 'impl's
+             )
 mkReprC ctx ty = do
-  
+
   -- Extract the context
   (tyvars, ty') <-
     case ty of
-      ForallT tyvars [] ty -> pure (tyvars, ty)
-      ForallT _      _  _  -> fail "mkReprC: type cannot have context"
-      ty                   -> pure ([], ty)
+      ForallT tyvars [] t -> pure (tyvars, t)
+      ForallT _      _  _ -> fail "mkReprC: type cannot have context"
+      t                   -> pure ([], t)
 
   -- Synthesize the new generic args and the mapping
   rustTyParams <- traverse (fmap mkTyParam . freshIdent . nameBase . varName) tyvars
@@ -111,20 +126,22 @@ mkReprC ctx ty = do
 
   case cons of
     [(_, tys)] -> do
-      (ty, (i, _), item) <- mkStruct ctx' dict False n tys
-   
-      error "incomplete" -- TODO: make a context
+      (_, (i, _), item) <- mkStruct ctx' dict False n tys
+  
+      pure (i, Nothing, [item])   
     _ -> do
-      (tys, is,     items) <- unzip3 <$> traverse (uncurry (mkStruct ctx' dict True)) cons
+      (tys, is,     items) <- unzip3 <$> traverse (\(n',ts) -> mkStruct ctx' dict True (mkName (nameBase n' ++ "C")) ts) cons
       (tyU, iUnion, itemU) <- mkUnion dict (mkName (nameBase n ++ "CUnion")) tys
-      (tyE, iTagged, item) <- mkTagged ctx' dict (mkName (nameBase n ++ "C")) (mkPathTy (mkIdent "u8")) tyU
+      (_, iTagged, item) <- mkTagged dict (mkName (nameBase n ++ "C")) (mkPathTy "u8") tyU
      
-      (tyE, iEnum, iVars, itemE) <- mkEnum ctx' dict n cons
-
+      (_, iEnum, iVars, itemE) <- mkEnum ctx' dict n cons
       (impl1, impl2) <- mkFromImpls dict iTagged iUnion is iEnum iVars
-      error "unimplemented" -- TODO two 'Into' symmetric impls
+
+      pure (iEnum, Just iTagged, items ++ [itemU, item, itemE, impl1, impl2])
 
 
+-- | Generate the pair of 'From' trait impl's that allow you to convert back and forth between the
+-- #[repr(C)] tagged union and the Rust enum.
 mkFromImpls :: TyVarDict     -- ^ Mapping of Haskell type variables to Rust type parameters
             -> Ident         -- ^ Tagged union name
             -> Ident         -- ^ Union name
@@ -139,8 +156,8 @@ mkFromImpls dict
             nEnum nVariants = do
   
   let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
-      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> mkIdent "1") [] Nothing ())
-                        | (ht, TyParam _ i _ _ _) <- dict
+      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> "1") [] Nothing ())
+                        | (_, TyParam _ i _ _ _) <- dict
                         ]
 
       -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
@@ -150,50 +167,53 @@ mkFromImpls dict
       fullImplBds = map (consBound copyBound) (ts ++ ts1BoundIntoT)
 
       -- From<TaggedUnion<T1, U1, ...>>
-      fromTaggedUnion = mkFromTraitRef nTagged ts1
+      fromTaggedUnionTr = mkFromTraitRef nTagged ts1
 
       -- Enum<T, U, ...> and TaggedUnion<T1, U1, ...>
       enumTy = mkGenPathTy nEnum (map tyParam2Ty ts)
       taggedTy1 = mkGenPathTy nTagged (map tyParam2Ty ts1)
   
-      flds = [ FieldPat Nothing (mkIdentPat (mkIdent "tag")) ()
-             , FieldPat Nothing (mkIdentPat (mkIdent "payload")) ()
+      flds = [ FieldPat Nothing (mkIdentPat "tag") ()
+             , FieldPat Nothing (mkIdentPat "payload") ()
              ]
       arms1 = [ mkArm pat body
               | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
               , let pat = LitP (Lit [] (Int Dec i Unsuffixed ()) ()) ()
-              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..]
-              , let exps = map ( (\y -> MethodCall [] y (mkIdent "into") Nothing [] ())
+              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..(n-1)]
+              , let exps = map ( (\y -> MethodCall [] y "into" Nothing [] ())
                                . mkPathExpr
                                . mkIdent
                                . ('y' :)
                                . show )
-                               [0..]
-              , let access = FieldAccess [] (mkPathExpr (mkIdent "payload")) (mkIdent ("v" ++ show i)) () 
-              , let stmts = [ Local (TupleStructP (mkPath s) vars Nothing ()) Nothing (Just access) [] ()
+                               [0..(n-1)]
+              , let access = FieldAccess [] (mkPathExpr "payload") (mkIdent ("v" ++ show i)) () 
+              , let pat2 = if null vars
+                             then PathP Nothing (mkPath s) ()
+                             else TupleStructP (mkPath s) vars Nothing ()
+              , let stmts = [ Local pat2 Nothing (Just access) [] ()
                             , if n == 0
-                                then NoSemi (mkPathExpr s) ()
-                                else NoSemi (Call [] (mkPathExpr v) exps ()) ()
+                                then NoSemi (mkPathExpr' [nEnum, v]) ()
+                                else NoSemi (Call [] (mkPathExpr' [nEnum, v]) exps ()) ()
                             ]
               , let body = BlockExpr [] (Block stmts Unsafe ()) ()
-              ] ++ [ mkArm (WildP ()) (error "put a panic here") ]
+              ] ++ [ mkArm (WildP ()) (void [R.expr| panic!("Unexpected tag!") |]) ]
       body1 = [ Local (StructP (mkPath nTagged) flds False ())
                       Nothing
-                      (Just (mkPathExpr (mkIdent "x")))
+                      (Just (mkPathExpr "x"))
                       []
                       ()
-              , NoSemi (Match [] (mkPathExpr (mkIdent "tag")) arms1 ())
+              , NoSemi (Match [] (mkPathExpr "tag") arms1 ())
                        ()
               ]
 
       -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
       --   From<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
-      impl1 = Impl [] PublicV Final Normal Positive
-                   (mkGenerics fullImplBds) (Just fromTaggedUnion)
+      impl1 = Impl [] InheritedV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just fromTaggedUnionTr)
                    enumTy [mkFromFunc taggedTy1 enumTy body1] ()
 
       -- From<Enum<T1, U1, ...>>
-      fromEnum = mkFromTraitRef nEnum ts1
+      fromEnumTr = mkFromTraitRef nEnum ts1
       
       -- TaggedUnion<T, U, ...> and Enum<T1, U1, ...>
       taggedTy = mkGenPathTy nTagged (map tyParam2Ty ts)
@@ -201,45 +221,47 @@ mkFromImpls dict
 
       arms2 = [ mkArm pat body
               | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
-              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..]
-              , let exps = map ( (\y -> MethodCall [] y (mkIdent "into") Nothing [] ())
+              , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..(n-1)]
+              , let exps = map ( (\y -> MethodCall [] y "into" Nothing [] ())
                                . mkPathExpr
                                . mkIdent
                                . ('y' :)
                                . show )
-                               [0..]
-              , let pat = TupleStructP (mkPath v) vars Nothing ()
+                               [0..(n-1)]
+              , let pat = if null vars
+                            then PathP Nothing (mkPath' [nEnum, v]) ()
+                            else TupleStructP (mkPath' [nEnum, v]) vars Nothing ()
               , let e = if n == 0
                           then mkPathExpr s
                           else Call [] (mkPathExpr s) exps ()
               , let flds' = [ Field (mkIdent ('v' : show i)) (Just e) () ]
               , let payload = Struct [] (mkPath nUnion) flds' Nothing ()
-              , let flds = [ Field (mkIdent "tag") (Just (Lit [] (Int Dec i Unsuffixed ()) ())) ()
-                           , Field (mkIdent "payload") (Just payload) ()
-                           ]
-              , let body = Struct [] (mkPath nTagged) flds Nothing ()
+              , let flds'' = [ Field "tag" (Just (Lit [] (Int Dec i Unsuffixed ()) ())) ()
+                             , Field "payload" (Just payload) ()
+                             ]
+              , let body = Struct [] (mkPath nTagged) flds'' Nothing ()
               ]
-      body2 = [ NoSemi (Match [] (mkPathExpr (mkIdent "x")) arms2 ()) () ]
+      body2 = [ NoSemi (Match [] (mkPathExpr "x") arms2 ()) () ]
 
       -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
       --   From<Enum<T1, U1, ...> for TaggedUnion<T, U, ...> { ... }
-      impl2 = Impl [] PublicV Final Normal Positive
-                   (mkGenerics fullImplBds) (Just fromEnum)
+      impl2 = Impl [] InheritedV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just fromEnumTr)
                    taggedTy [mkFromFunc enumTy1 taggedTy body2] ()
 
       
   pure (impl1, impl2)
   where
     mkFromTraitRef :: Ident -> [TyParam ()] -> TraitRef ()
-    mkFromTraitRef n t = TraitRef (mkGenPath (mkIdent "From") [ mkGenPathTy n (map tyParam2Ty t) ])
+    mkFromTraitRef n t = TraitRef (mkGenPath "From" [ mkGenPathTy n (map tyParam2Ty t) ])
 
     mkFromFunc :: Ty () -> Ty () -> [Stmt ()] -> ImplItem ()
     mkFromFunc argTy retTy body = let gen = mkGenerics []
-                                      arg = Arg (Just (mkIdentPat (mkIdent "x"))) argTy ()
+                                      arg = Arg (Just (mkIdentPat "x")) argTy ()
                                       decl = FnDecl [arg] (Just retTy) False ()
                                       sig = MethodSig Normal NotConst Rust decl 
                                       blk = Block body Normal ()
-                                  in MethodI [] PublicV Final (mkIdent "from") gen sig blk ()
+                                  in MethodI [] InheritedV Final "from" gen sig blk ()
 
 -- | Extend the context with the type variables in the given dictionary.
 extendCtx :: TyVarDict -> Context -> Q Context
@@ -271,12 +293,12 @@ mkEnum :: Context           -- ^ current context (in order to lookup what Rust t
             )
 mkEnum ctx dict n cons = do
   let itemN = mkIdent (nameBase n)
-      ps = [ typ  | (ht, typ) <- dict ]
+      ps = [ typ  | (_, typ) <- dict ]
       outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- ps ]
   
   (varNs, vars) <- fmap unzip $
-    for cons $ \(n, flds) -> do
-      let varN = mkIdent (nameBase n)
+    for cons $ \(nCon, flds) -> do
+      let varN = mkIdent (nameBase nCon)
       varData <- mkVariant ctx flds
       pure (varN, Variant varN [] varData Nothing ())
 
@@ -307,9 +329,9 @@ mkUnion :: TyVarDict   -- ^ Mapping of Haskell type variables to Rust type param
              )
 mkUnion dict n tys = do
   let itemN = mkIdent (nameBase n)
-      copyPs = [ consBound copyBound typ  | (ht, typ) <- dict ]
-      fields = [ StructField (Just fld) PublicV ty [] () 
-               | (ty, i) <- zip tys [0..]
+      copyPs = [ consBound copyBound typ  | (_, typ) <- dict ]
+      fields = [ StructField (Just fld) InheritedV ty [] () 
+               | (ty, i) <- zip tys [(0 :: Int)..]
                , let fld = mkIdent ("v" ++ show i)
                ]
       var = StructD fields ()
@@ -329,9 +351,7 @@ mkUnion dict n tys = do
 --   payload: UnionADT<a>,
 -- }
 -- @
-mkTagged :: Context     -- ^ current context (in order to lookup what Rust types corresponding to
-                        -- Haskell ones)
-         -> TyVarDict   -- ^ Mapping of Haskell type variables to Rust type parameters
+mkTagged :: TyVarDict   -- ^ Mapping of Haskell type variables to Rust type parameters
          -> Name        -- ^ What name to give the struct
          -> Ty ()       -- ^ Discriminator type
          -> Ty ()       -- ^ Payload union type
@@ -339,11 +359,11 @@ mkTagged :: Context     -- ^ current context (in order to lookup what Rust types
               , Ident   --   Output name
               , Item () --   Struct deifnition
               )
-mkTagged ctx dict n disc union = do
+mkTagged dict n disc union = do
   let itemN = mkIdent (nameBase n)
-      copyPs = [ consBound copyBound typ | (ht, typ) <- dict ]
-      fields = [ StructField (Just (mkIdent "tag")) PublicV disc [] ()
-               , StructField (Just (mkIdent "payload")) PublicV union [] ()
+      copyPs = [ consBound copyBound typ | (_, typ) <- dict ]
+      fields = [ StructField (Just "tag") InheritedV disc [] ()
+               , StructField (Just "payload") InheritedV union [] ()
                ]
       var = StructD fields ()
       struct = StructItem [reprC, deriveCopyClone] PublicV itemN var (mkGenerics copyPs) ()
@@ -390,5 +410,5 @@ mkVariant :: Context -> [Type] -> Q (VariantData ())
 mkVariant _ [] = pure (UnitD ())
 mkVariant ctx tys = do
   rustTys <- traverse (`getHTypeInContext` ctx) tys
-  let structFlds = [ StructField Nothing PublicV t [] () | t <- rustTys ]
+  let structFlds = [ StructField Nothing InheritedV t [] () | t <- rustTys ]
   pure (TupleD structFlds ())

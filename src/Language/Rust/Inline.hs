@@ -64,6 +64,7 @@ module Language.Rust.Inline (
   withByteString,
   unsafeLocalState,
   mkStorable,
+  mkReprC,
 
   -- * Top-level Rust items
   externCrate,
@@ -75,6 +76,7 @@ import Language.Rust.Inline.Marshal
 import Language.Rust.Inline.Parser
 import Language.Rust.Inline.Pretty
 import Language.Rust.Inline.TH.Storable      ( mkStorable )
+import Language.Rust.Inline.TH.ReprC         ( mkReprC )
 
 import Language.Haskell.TH.Syntax
 import Language.Haskell.TH.Quote             ( QuasiQuoter(..) )
