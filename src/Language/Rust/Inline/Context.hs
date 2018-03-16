@@ -163,8 +163,7 @@ libc = mkContext
 -- memory layouts.
 basic :: Q Context
 basic = mkContext
-  [ ([ty| bool  |], [t| Word8   |])
-  , ([ty| char  |], [t| Char    |]) -- 4 bytes
+  [ ([ty| char  |], [t| Char    |]) -- 4 bytes
   , ([ty| i8    |], [t| Int8    |])
   , ([ty| i16   |], [t| Int16   |])
   , ([ty| i32   |], [t| Int32   |])
@@ -177,6 +176,7 @@ basic = mkContext
   , ([ty| f64   |], [t| Double  |])
   , ([ty| isize |], [t| Int     |])
   , ([ty| usize |], [t| Word    |])
+  , ([ty| bool  |], [t| Word8   |])
   , ([ty| ()    |], [t| ()      |])
   ]
 
