@@ -13,6 +13,8 @@ module Language.Rust.Inline.TH.Utilities (
   getConstructors,
   varName,
   getAllVars,
+  getTyConOpt,
+  getTyCon,
 ) where
 
 import Language.Haskell.TH
@@ -63,14 +65,21 @@ subTy _    t = t
 
 -- | Extract the type constructor of a type, along with the type arguments
 getTyCon :: Type -> Q (Name, [Type])
-getTyCon = fmap (\(n, argsRev) -> (n, reverse argsRev)) . go
+getTyCon = maybe (fail msg) pure . getTyConOpt
+  where  msg = "getTyCon: could not find type constructor"
+
+
+-- | Extract the type constructor of a type, along with the type arguments
+getTyConOpt :: Type -> Maybe (Name, [Type])
+getTyConOpt = fmap (\(n, argsRev) -> (n, reverse argsRev)) . go
   where
     go (ConT n) = pure (n, [])
     go (AppT t1 t2) = fmap (\(n, args) -> (n, t2 : args)) (go t1)
     go (InfixT t1 n t2) = pure (n, [t1, t2])
     go (ParensT t) = go t
-    go _ = fail "getTyCon: could not find type constructor"
-  
+    go _ = Nothing 
+
+
 -- | Extract the fields from a constructor, applying a substitution along the
 -- way
 getSubCon :: [(Name, Type)] -> Con -> Q (Name, [Type])

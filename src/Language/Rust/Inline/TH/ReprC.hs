@@ -11,7 +11,8 @@ Portability : GHC
 {-# LANGUAGE OverloadedStrings #-}
 
 module Language.Rust.Inline.TH.ReprC (
-  mkReprC
+  mkReprC,
+  mkGenPathTy,
 ) where
 
 import Language.Rust.Inline.TH.Utilities
@@ -19,12 +20,12 @@ import Language.Rust.Inline.Context
 
 import Language.Haskell.TH hiding (Stmt, Match, WildP, Unsafe, LitP, Pat)
 import Language.Rust.Syntax
-import Language.Rust.Data.Ident ( Ident, mkIdent )
+import Language.Rust.Data.Ident            ( Ident, mkIdent )
 import qualified Language.Rust.Quote as R
 
-import Control.Monad    ( void )
-import Data.Traversable ( for )
-import Data.List.NonEmpty ( NonEmpty(..) )
+import Control.Monad                       ( void )
+import Data.Traversable                    ( for )
+import Data.List.NonEmpty                  ( NonEmpty(..) )
 
 -- | TODO mangle me
 freshIdent :: String -> Q Ident
@@ -302,7 +303,7 @@ mkEnum ctx dict n cons = do
       varData <- mkVariant ctx flds
       pure (varN, Variant varN [] varData Nothing ())
 
-  let enum = Enum [] PublicV itemN vars (mkGenerics ps) ()
+  let enum = Enum [deriveCopyClone] PublicV itemN vars (mkGenerics ps) ()
 
   pure (outTy, itemN, varNs, enum)
 
