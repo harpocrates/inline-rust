@@ -12,13 +12,15 @@ Portability : GHC
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MagicHash #-}
 
 module Language.Rust.Inline.Context where
 
 import Language.Rust.Inline.Pretty ( renderType )
 
-import Language.Rust.Syntax        ( Ty(BareFn, Ptr), Abi(..), FnDecl(..), Arg(..), Mutability(..) )
 import Language.Rust.Quote         ( ty )
+import Language.Rust.Syntax        ( Ty(BareFn, Ptr), Abi(..), FnDecl(..),
+                                     Arg(..), Mutability(..) )
 
 import Language.Haskell.TH 
 
@@ -33,37 +35,57 @@ import Data.Word                   ( Word8, Word16, Word32, Word64 )
 import Foreign.Ptr                 ( Ptr, FunPtr )
 import Foreign.C.Types             -- pretty much every type here is used
 
+import GHC.Exts                    ( Char#, Int#, Word#, Float#, Double#,
+                                     ByteArray# )
+
 -- Easier on the eyes
 type RType = Ty ()
 type HType = Type
 
--- | Represents a prioritized set of rules for converting a Rust type to a
--- Haskell one. The 'Context' argument encodes the fact that we may need look
+-- | Represents a prioritized set of rules for mapping Haskell types into Rust
+-- ones and vice versa.
+--
+-- The 'Context' argument encodes the fact that we may need look
 -- recursively into the 'Context' again before possibly producing a Haskell
 -- type.
-newtype Context = Context ( [ RType -> Context -> First (Q HType, Maybe (Q RType)) ]
-                          , [ HType -> Context -> First (Q RType) ]
-                          )
+newtype Context =
+    Context ( [ RType -> Context -> First (Q HType, Maybe (Q RType)) ]
+            -- Given a Rust type in a quasiquote, we need to look up the
+            -- corresponding Haskell type (for the FFI import) as well as the
+            -- C-compatible Rust type (if the initial Rust type isn't already
+            -- @#[repr(C)]@.
+            
+            , [ HType -> Context -> First (Q RType) ]
+            -- Given a field in a Haskell ADT, we need to figure out which
+            -- (not-necessarily @#[repr(C)]@) Rust type normally maps into this
+            -- Haskell type.
+            )
   deriving (Semigroup, Monoid, Typeable)
 
+-- | Applicative lifting of the 'Context' instance
 instance Semigroup (Q Context) where
   (<>) = liftM2 (<>)
 
+-- | Applicative lifting of the 'Context' instance
 instance Monoid (Q Context) where
   mappend = (<>)
   mempty = pure mempty
   
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
--- The approach taken is to scan the context rules from left to right looking
--- for the first successful conversion to a Haskell type.
+-- If the Rust type is not C-compatible, also return a C compatible type. It is
+-- expected that:
 --
--- It is expected that the 'HType' found from an 'RType' have a 'Storable'
--- instance which has the memory layout of 'RType'.
+--   1. The Haskell type have a 'Storable' instance
+--   2. The C-compatible Rust type have the same layout
+--
 lookupRTypeInContext :: RType -> Context -> First (Q HType, Maybe (Q RType))
 lookupRTypeInContext rustType context@(Context (rules, _)) =
   foldMap (\fits -> fits rustType context) rules
 
+-- | Search in a 'Context' for the Rust type corresponding to a Haskell type.
+-- Looking up the Rust type using 'lookupRTypeInContext' should yield the
+-- initial Haskell type again.
 lookupHTypeInContext :: HType -> Context -> First (Q RType)
 lookupHTypeInContext haskType context@(Context (_, rules)) =
   foldMap (\fits -> fits haskType context) rules
@@ -93,7 +115,8 @@ getHTypeInContext haskType context =
 
 
 -- | Make a 'Context' consisting of rules to map the Rust types on the left to
--- the Haskell types on the right.
+-- the Haskell types on the right. The Rust types should all be @#[repr(C)]@
+-- and the Haskell types should all be 'Storable'.
 mkContext :: [(Ty a, Q HType)] -> Q Context
 mkContext tys = do
     tys' <- traverse (\(rt,qht) -> fmap ((,) (void rt)) qht) tys
@@ -180,11 +203,25 @@ basic = mkContext
   , ([ty| ()    |], [t| ()      |])
   ]
 
+-- | Basic unboxed Haskell types
+--
+-- TODO: MutableByteArray#
+ghcUnboxed :: Q Context
+ghcUnboxed = mkContext
+  [ ([ty| char      |], [t| Char#   |])
+  , ([ty| isize     |], [t| Int#    |])
+  , ([ty| usize     |], [t| Word#   |])
+  , ([ty| f32       |], [t| Float#  |])
+  , ([ty| f64       |], [t| Double# |])
+  , ([ty| *const i8 |], [t| ByteArray# |])
+  ]
+
 -- | Haskell pointers map onto Rust pointers. Note that unlike Rust, Haskell
 -- doesn't really distinguish between pointers pointing to immutable memory from
 -- those pointing to to mutable memory, so it is up to the user to enforce this.
 --
--- NOTE: pointers require the rust type to be a no-op conversion to Haskell's Storable
+-- NOTE: pointers will not support pointed types that require an intermediate
+--       Rust type.
 pointers :: Q Context
 pointers = do
     ptrConT <- [t| Ptr |]
@@ -210,21 +247,26 @@ pointers = do
 -- type 'FunPtr'. The reason for this is simple: the GHC runtime has no way of
 -- automatically detecting when a pointer to a function is no longer present on
 -- the Rust side.
+--
+-- NOTE: function pointers will not support pointed types that require an intermediate
+--       Rust type.
 functions :: Q Context
 functions = pure (Context ([rule], undefined))
   where
   rule ft context = do
     BareFn _ C _ (FnDecl args retTy False _) _ <- pure ft
-    args' <- for args $ \arg -> do
-               Arg _ argTy _ <- pure arg
-               (t', Nothing) <- lookupRTypeInContext argTy context
-               pure t'
+    args' <-
+      for args $ \arg -> do
+        Arg _ argTy _ <- pure arg
+        (t', Nothing) <- lookupRTypeInContext argTy context
+        pure t'
 
-    retTy' <- case retTy of
-                Nothing -> pure [t| IO () |]
-                Just t -> do
-                  (t', Nothing) <- lookupRTypeInContext t context
-                  pure t'
+    retTy' <-
+      case retTy of
+        Nothing -> pure [t| IO () |]
+        Just t -> do
+          (t', Nothing) <- lookupRTypeInContext t context
+          pure t'
 
     let hFunTy = foldr (\l r -> [t| $l -> $r |]) retTy' args'
     let hFunPtr = [t| FunPtr $hFunTy |]

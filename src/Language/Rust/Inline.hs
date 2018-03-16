@@ -46,9 +46,12 @@ module Language.Rust.Inline (
   mkContext,
   lookupRTypeInContext,
   getRTypeInContext,
+  lookupHTypeInContext,
+  getHTypeInContext,
   -- ** Built-in contexts
   basic,
   libc,
+  ghcUnboxed,
   functions,
   pointers,
   -- ** Marshalling

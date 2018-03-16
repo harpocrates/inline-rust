@@ -52,7 +52,7 @@ ghcMarshallable ty = do
             , [t| Int    |], [t| Int#    |]
             , [t| Word   |], [t| Word#   |]
             , [t| Double |], [t| Double# |]
-            , [t| Float |],  [t| Float#  |]
+            , [t| Float  |], [t| Float#  |]
             
             , [t| Bool |], [t| () |]
             
@@ -60,7 +60,6 @@ ghcMarshallable ty = do
             , [t| Word8 |], [t| Word16 |], [t| Word32 |], [t| Word64 |]
            
             , [t| Addr# |]
-            , [t| MutableByteArray# |]
          --   , [t| ForeignObj# |] TODO: where is this even defined
             , [t| ByteArray# |]
             ]
@@ -68,11 +67,8 @@ ghcMarshallable ty = do
             , [t| FunPtr |]
             , [t| StablePtr |]
             , [t| StablePtr# |]
+            , [t| MutableByteArray# |]
             ]
-
-
-
-
 
 
 -- * Function pointers
