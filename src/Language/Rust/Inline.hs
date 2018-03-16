@@ -41,6 +41,7 @@ module Language.Rust.Inline (
   HType,
   -- ** Using and defining contexts
   setContext,
+  extendContext,
   singleton,
   mkContext,
   lookupRTypeInContext,
@@ -79,6 +80,7 @@ import Language.Rust.Inline.TH.Storable      ( mkStorable )
 import Language.Rust.Inline.TH.ReprC         ( mkReprC )
 
 import Language.Haskell.TH.Syntax
+import Language.Haskell.TH.Lib
 import Language.Haskell.TH.Quote             ( QuasiQuoter(..) )
 
 
@@ -86,7 +88,7 @@ import Foreign.Marshal.Utils                 ( with, new )
 import Foreign.Marshal.Alloc                 ( alloca, free ) 
 import Foreign.Marshal.Array                 ( withArrayLen, newArray )
 import Foreign.Marshal.Unsafe                ( unsafeLocalState )
-import Foreign.Ptr                           ( freeHaskellFunPtr )
+import Foreign.Ptr                           ( freeHaskellFunPtr, Ptr )
 
 import Control.Monad                         ( void )
 import Data.List                             ( intercalate )
@@ -269,23 +271,59 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   (haskRet, reprCRet) <- getRType (void rustRet)
   (haskArgs, reprCArgs) <- unzip <$> traverse (getRType . void) rustArgs
 
+  -- Convert the Haskell return type to a marshallable FFI type
+  (retByVal, haskRet') <- do
+    marshallable <- ghcMarshallable haskRet
+    if marshallable
+      then pure (True, [t| IO $(pure haskRet) |])
+      else pure (False, [t| Ptr $(pure haskRet) -> IO () |])
+    
+  -- Convert the Haskell arguments to marshallable FFI types
+  (argsByVal, haskArgs') <- fmap unzip $
+    for haskArgs $ \haskArg -> do
+      marshallable <- ghcMarshallable haskArg
+      if marshallable
+        then pure (True, haskArg)
+        else do ptr <- [t| Ptr $(pure haskArg) |]
+                pure (False, ptr)
+
   -- Generate the Haskell FFI import declaration and emit it
-  haskSig <- foldr (\l r -> [t| $(pure l) -> $r |])
-                   (if isPure then pure haskRet else [t| IO $(pure haskRet) |])
-                   haskArgs
+  haskSig <- foldr (\l r -> [t| $(pure l) -> $r |]) haskRet' haskArgs'
   let ffiImport = ForeignD (ImportF CCall safety qqStrName qqName haskSig)
   addTopDecls [ffiImport]
 
   -- Generate the Haskell FFI call
-  haskArgsE <- for rustArgNames $ \argStr -> do
-                 arg <- lookupValueName argStr
-                 case arg of
-                   Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
-                   Just argName -> pure (VarE argName)
-  let haskCall = foldl AppE (VarE qqName) haskArgsE
+  let goArgs :: [Q Exp] -> [(String, Bool)] -> Q Exp
+
+      -- Once we run out of arguments we call the quasiquote function with all the
+      -- accumulated arguments. If the return value is not marshallable, we have to 
+      -- 'alloca' some space to put the return value.
+      goArgs acc [] | retByVal = appsE (varE qqName : reverse acc)
+                    | otherwise = do
+                        ret <- newName "ret"
+                        [e| alloca (\( $(varP ret) ) ->
+                              do { $(appsE (varE qqName : reverse (varE ret : acc)))
+                                 ; peek $(varE ret)
+                                 }) |]
+     
+      -- If an argument is by value, we just stack it into the accumulated arguments.
+      -- Otherwise, we use 'with' to get a pointer to its stack position.
+      goArgs acc ((argStr, byVal) : args) = do
+        arg <- lookupValueName argStr
+        case arg of
+          Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
+          Just argName | byVal -> goArgs (varE argName : acc) args
+                       | otherwise -> do
+                          x <- newName "x"
+                          [e| with $(varE argName) (\( $(varP x) ) ->
+                                $(goArgs (varE x : acc) args)) |]
+
+  let haskCallIO = goArgs [] (rustArgNames `zip` argsByVal)
+      haskCall | isPure = [e| unsafeLocalState $haskCallIO |]
+               | otherwise = haskCallIO
 
   -- Generate the Rust function arguments and the converted arguments
-  let (rustArgs', rustConvertedArgs) = unzip $ zipWith mergeArgs rustArgs reprCArgs
+  let (rustArgs', rustConvertedArgs) = unzip $ mergeArgs <$> rustArgs <*> reprCArgs
       (rustRet', rustConvertedRet) = mergeArgs rustRet reprCRet
       
      -- mergeArgs :: Ty Span -> Maybe RType -> (Ty Span, Ty Span)
@@ -294,20 +332,34 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   
   
   -- Generate the Rust function.
+  let (retArg, retTy, ret)
+         | retByVal  = ( []
+                       , renderType rustRet'
+                       , "out.into()"
+                       )
+         | otherwise = ( ["ret_" ++ qqStrName ++ ": *mut " ++ renderType rustRet']
+                       , "()"
+                       , "unsafe { std::ptr::write(ret_" ++ qqStrName ++ ", out.into()) }"
+                       )
   void . emitCodeBlock . unlines $
     [ "#[no_mangle]"
     , "pub extern \"C\" fn " ++ qqStrName ++ "("
-    , intercalate ", " [ s ++ ": " ++ renderType t | (s,t) <- zip rustArgNames rustArgs' ]
-    , ") -> " ++ renderType rustRet' ++ " {"
-    , unlines [ "  let " ++ s ++ ": " ++ renderType t ++ " = " ++ s ++ ".into();"
-              | (s,t) <- zip rustArgNames rustConvertedArgs
+    , intercalate ", " ([ s ++ ": " ++ marshal (renderType t)
+                        | (s,t,v) <- zip3 rustArgNames rustArgs' argsByVal
+                        , let marshal x = if v then x else "*const " ++ x
+                        ] ++ retArg)
+    , ") -> " ++ retTy ++ " {"
+    , unlines [ "  let " ++ s ++ ": " ++ renderType t ++ " = " ++ marshal s ++ ".into();"
+              | (s,t,v) <- zip3 rustArgNames rustConvertedArgs argsByVal
+              , let marshal x = if v then x else "unsafe { std::ptr::read(" ++ x ++ ") }"
               ]
     , "  let out: " ++ renderType rustConvertedRet ++ " = " ++ renderTokens rustBody ++ ";"
-    , "  out.into()"
+    , "  " ++ ret
     , "}"
     ]
 
   -- Return the Haskell call to the FFI import
-  pure haskCall
+  haskCall
+
 
 

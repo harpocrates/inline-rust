@@ -17,6 +17,10 @@ module Language.Rust.Inline.Internal (
   getHType,
   addForeignRustFile,
   addForeignRustFile',
+  getContext,
+  peekContext,
+  extendContext,
+  initModuleState,
 ) where
 
 import Language.Rust.Inline.Context
@@ -102,6 +106,21 @@ setContext context = do
     Nothing -> void (initModuleState (Just context))
     Just _ -> reportError "The module has already been initialised (setContext)"
   pure []
+
+extendContext :: Q Context -> Q [Dec]
+extendContext qExtension = do
+  extension <- qExtension
+  moduleState <- initModuleState Nothing
+  putQ (moduleState { getContext = extension <> getContext moduleState })
+  pure []
+  
+
+peekContext :: Q Context
+peekContext = do
+  moduleState :: Maybe ModuleState <- getQ
+  case moduleState of
+    Nothing -> mempty 
+    Just ms -> pure (getContext ms)
 
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.

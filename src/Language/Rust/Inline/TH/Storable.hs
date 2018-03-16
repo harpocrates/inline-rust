@@ -195,9 +195,8 @@ processField ty = do
                  })
 
   -- TODO: consider degenerate sizeof(..) = 0 cases
-  let offset = unType <$> [|| $$beginOff `div` $$sizeTy ||]
-  pure ( \addrE -> [e| peek (castPtr $(pure addrE) `plusPtr` $offset) |]
-       , \addrE -> [e| poke (castPtr $(pure addrE) `plusPtr` $offset) |]
+  pure ( \addrE -> [e| peek (castPtr $(pure addrE) `plusPtr` $(unType <$> beginOff)) |]
+       , \addrE -> [e| poke (castPtr $(pure addrE) `plusPtr` $(unType <$> beginOff)) |]
        )
 
 -- | Process an algebraic data type.

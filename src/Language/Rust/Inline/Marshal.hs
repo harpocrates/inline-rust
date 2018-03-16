@@ -9,6 +9,7 @@ Portability : GHC
 -}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE MagicHash #-}
 
 module Language.Rust.Inline.Marshal where
 
@@ -17,15 +18,61 @@ import Language.Rust.Inline.Context
 import Language.Haskell.TH 
 import Language.Haskell.TH.Syntax  ( addTopDecls ) 
 
-import Data.Word                   ( Word8 )
+import Data.Word
+import Data.Int
 
 import Foreign.Ptr                 ( Ptr, FunPtr, plusPtr )
 import Foreign.ForeignPtr          ( withForeignPtr )
+import Foreign.StablePtr           ( StablePtr )
 import Foreign.Storable            ( Storable )
 
 import Data.ByteString.Internal    ( ByteString(..) )
 import Data.Array.Storable         ( StorableArray, Ix, withStorableArray,
                                      getBounds )
+
+import GHC.Exts
+
+-- | Identify which types can be marshalled by the GHC FFI. A negative response
+-- doesn't mean the type can't be marshalled - just that we aren't sure it can.
+--
+-- This is based on section 8.4.2 (Foreign Types) of Haskell2010 and section
+-- 11.1.1 (Unboxed types) of the GHC manual. We could do a better job here by
+-- also letting through type synonyms / newtypes.
+ghcMarshallable :: Type -> Q Bool
+ghcMarshallable ty = do
+   simple <- sequence qSimple
+   tycons <- sequence qTycons
+
+   case ty of
+     _          | ty `elem` simple  -> pure True
+     AppT con _ | con `elem` tycons -> pure True
+     _                              -> pure False
+  where
+  qSimple = [ [t| Char   |], [t| Char#   |] 
+            , [t| Int    |], [t| Int#    |]
+            , [t| Word   |], [t| Word#   |]
+            , [t| Double |], [t| Double# |]
+            , [t| Float |],  [t| Float#  |]
+            
+            , [t| Bool |], [t| () |]
+            
+            , [t| Int8  |], [t| Int16  |], [t| Int32  |], [t| Int64  |]
+            , [t| Word8 |], [t| Word16 |], [t| Word32 |], [t| Word64 |]
+           
+            , [t| Addr# |]
+            , [t| MutableByteArray# |]
+         --   , [t| ForeignObj# |] TODO: where is this even defined
+            , [t| ByteArray# |]
+            ]
+  qTycons = [ [t| Ptr |]
+            , [t| FunPtr |]
+            , [t| StablePtr |]
+            , [t| StablePtr# |]
+            ]
+
+
+
+
 
 
 -- * Function pointers
