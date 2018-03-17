@@ -82,8 +82,8 @@ copyBound :: TyParamBound ()
 copyBound = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkPath "Copy")) ()) None ()
 
 -- | The @Into<T>@ type parameter bound.
-intoBound :: Ty () -> TyParamBound ()
-intoBound t = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkGenPath "Into" [t])) ()) None ()
+marshalBound :: Ty () -> TyParamBound ()
+marshalBound t = TraitTyParamBound (PolyTraitRef [] (TraitRef (mkGenPath "MarshalInto" [t])) ()) None ()
 
 -- | Make simple generics from a list of type parameters.
 mkGenerics :: [TyParam ()] -> Generics ()
@@ -104,7 +104,8 @@ mkReprC :: Context         -- ^ current context (in order to lookup what Rust ty
         -> Type            -- ^ Haskell type to convert
         -> Q ( Ident       --   Name of Rust enum
              , Maybe Ident --   Name of #[repr(C)] tagged union  
-             , [Item ()]   --   Support type definitions and 'impl's
+             , [Item ()]   --   Support type definitions
+             , [Item ()]   --   'impl's of @MarshalInto@
              )
 mkReprC ctx ty = do
 
@@ -127,32 +128,80 @@ mkReprC ctx ty = do
 
   case cons of
     [(_, tys)] -> do
-      (_, (i, _), item) <- mkStruct ctx' dict False n tys
-  
-      pure (i, Nothing, [item])   
+      (_, (i, c), item) <- mkStruct ctx' dict False n tys
+      impl <- mkMarshalStructImpl dict i c
+
+      pure (i, Nothing, [item], [impl])   
     _ -> do
       (tys, is,     items) <- unzip3 <$> traverse (\(n',ts) -> mkStruct ctx' dict True (mkName (nameBase n' ++ "C")) ts) cons
       (tyU, iUnion, itemU) <- mkUnion dict (mkName (nameBase n ++ "CUnion")) tys
       (_, iTagged, item) <- mkTagged dict (mkName (nameBase n ++ "C")) (mkPathTy "u8") tyU
      
       (_, iEnum, iVars, itemE) <- mkEnum ctx' dict n cons
-      (impl1, impl2) <- mkFromImpls dict iTagged iUnion is iEnum iVars
+      (impl1, impl2) <- mkMarshalEnumImpls dict iTagged iUnion is iEnum iVars
 
-      pure (iEnum, Just iTagged, items ++ [itemU, item, itemE, impl1, impl2])
+      pure (iEnum, Just iTagged, items ++ [itemU, item, itemE], [impl1, impl2])
 
 
--- | Generate the pair of 'From' trait impl's that allow you to convert back and forth between the
+mkMarshalStructImpl :: TyVarDict
+                    -> Ident     -- ^ struct name
+                    -> Int       -- ^ number of arguments
+                    -> Q ( Item () )
+mkMarshalStructImpl dict nStruct n = do
+  let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
+      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> "1") [] Nothing ())
+                        | (_, TyParam _ i _ _ _) <- dict
+                        ]
+
+      -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
+      ts1BoundIntoT = zipWith consBound (map (marshalBound . tyParam2Ty) ts) ts1
+
+      -- full parameters: @T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...@ 
+      fullImplBds = map (consBound copyBound) (ts ++ ts1BoundIntoT)
+
+      -- MarshalInto<TaggedUnion<T, U, ...>>
+      marshalIntoStruct = mkMarshalInto nStruct ts
+
+
+      -- Enum<T1, U1, ...> and TaggedUnion<T, U, ...>
+      structTy1 = mkGenPathTy nStruct (map tyParam2Ty ts1)
+      structTy = mkGenPathTy nStruct (map tyParam2Ty ts)
+
+      vars = map (mkIdentPat . mkIdent . ('x' :) . show) [0..(n-1)]
+      exps = map ( (\y -> MethodCall [] y "marshal" Nothing [] ())
+                 . mkPathExpr
+                 . mkIdent
+                 . ('x' :)
+                 . show )
+                 [0..(n-1)]
+      pat = if null vars
+               then PathP Nothing (mkPath nStruct) ()
+               else TupleStructP (mkPath nStruct) vars Nothing ()
+      stmts = [ Local pat Nothing (Just (mkPathExpr "self")) [] ()
+              , if n == 0
+                  then NoSemi (mkPathExpr nStruct) ()
+                  else NoSemi (Call [] (mkPathExpr nStruct) exps ()) ()
+              ]
+
+      -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
+      --   MarshalInto<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
+      impl1 = Impl [] InheritedV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just marshalIntoStruct)
+                   structTy1 [mkMarshalFunc structTy1 structTy stmts] ()
+  pure impl1
+
+-- | Generate the pair of 'MarshalEnum' trait impl's that allow you to convert back and forth between the
 -- #[repr(C)] tagged union and the Rust enum.
-mkFromImpls :: TyVarDict     -- ^ Mapping of Haskell type variables to Rust type parameters
-            -> Ident         -- ^ Tagged union name
-            -> Ident         -- ^ Union name
-            -> [(Ident,Int)] -- ^ Structs that are fields of union (and their arity)
-            -> Ident         -- ^ Enum name
-            -> [Ident]       -- ^ Enum variants
-            -> Q ( Item ()   --   Impl mapping #[repr(C)] tagged union into enum
-                 , Item ()   --   Impl mapping enum into tagged union
-                 )
-mkFromImpls dict
+mkMarshalEnumImpls :: TyVarDict     -- ^ Mapping of Haskell type variables to Rust type parameters
+                   -> Ident         -- ^ Tagged union name
+                   -> Ident         -- ^ Union name
+                   -> [(Ident,Int)] -- ^ Structs that are fields of union (and their arity)
+                   -> Ident         -- ^ Enum name
+                   -> [Ident]       -- ^ Enum variants
+                   -> Q ( Item ()   --   Impl mapping #[repr(C)] tagged union into enum
+                        , Item ()   --   Impl mapping enum into tagged union
+                        )
+mkMarshalEnumImpls dict
             nTagged nUnion nStructs
             nEnum nVariants = do
   
@@ -162,17 +211,17 @@ mkFromImpls dict
                         ]
 
       -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
-      ts1BoundIntoT = zipWith consBound (map (intoBound . tyParam2Ty) ts) ts1
+      ts1BoundIntoT = zipWith consBound (map (marshalBound . tyParam2Ty) ts) ts1
 
       -- full parameters: @T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...@ 
       fullImplBds = map (consBound copyBound) (ts ++ ts1BoundIntoT)
 
-      -- From<TaggedUnion<T1, U1, ...>>
-      fromTaggedUnionTr = mkFromTraitRef nTagged ts1
+      -- MarshalInto<TaggedUnion<T, U, ...>>
+      marshalIntoUnion = mkMarshalInto nTagged ts
 
-      -- Enum<T, U, ...> and TaggedUnion<T1, U1, ...>
-      enumTy = mkGenPathTy nEnum (map tyParam2Ty ts)
-      taggedTy1 = mkGenPathTy nTagged (map tyParam2Ty ts1)
+      -- Enum<T1, U1, ...> and TaggedUnion<T, U, ...>
+      enumTy1 = mkGenPathTy nEnum (map tyParam2Ty ts1)
+      taggedTy = mkGenPathTy nTagged (map tyParam2Ty ts)
   
       flds = [ FieldPat Nothing (mkIdentPat "tag") ()
              , FieldPat Nothing (mkIdentPat "payload") ()
@@ -181,7 +230,7 @@ mkFromImpls dict
               | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
               , let pat = LitP (Lit [] (Int Dec i Unsuffixed ()) ()) ()
               , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..(n-1)]
-              , let exps = map ( (\y -> MethodCall [] y "into" Nothing [] ())
+              , let exps = map ( (\y -> MethodCall [] y "marshal" Nothing [] ())
                                . mkPathExpr
                                . mkIdent
                                . ('y' :)
@@ -200,7 +249,7 @@ mkFromImpls dict
               ] ++ [ mkArm (WildP ()) (void [R.expr| panic!("Unexpected tag!") |]) ]
       body1 = [ Local (StructP (mkPath nTagged) flds False ())
                       Nothing
-                      (Just (mkPathExpr "x"))
+                      (Just (mkPathExpr "self"))
                       []
                       ()
               , NoSemi (Match [] (mkPathExpr "tag") arms1 ())
@@ -208,22 +257,22 @@ mkFromImpls dict
               ]
 
       -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
-      --   From<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
+      --   MarshalInto<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
       impl1 = Impl [] InheritedV Final Normal Positive
-                   (mkGenerics fullImplBds) (Just fromTaggedUnionTr)
-                   enumTy [mkFromFunc taggedTy1 enumTy body1] ()
+                   (mkGenerics fullImplBds) (Just marshalIntoUnion)
+                   enumTy1 [mkMarshalFunc enumTy1 taggedTy body2] ()
 
       -- From<Enum<T1, U1, ...>>
-      fromEnumTr = mkFromTraitRef nEnum ts1
+      fromEnumTr = mkMarshalInto nEnum ts
       
       -- TaggedUnion<T, U, ...> and Enum<T1, U1, ...>
-      taggedTy = mkGenPathTy nTagged (map tyParam2Ty ts)
-      enumTy1 = mkGenPathTy nEnum (map tyParam2Ty ts1)
+      taggedTy1 = mkGenPathTy nTagged (map tyParam2Ty ts1)
+      enumTy = mkGenPathTy nEnum (map tyParam2Ty ts)
 
       arms2 = [ mkArm pat body
               | (i, (s, n), v) <- zip3 [0..] nStructs nVariants
               , let vars = map (mkIdentPat . mkIdent . ('y' :) . show) [0..(n-1)]
-              , let exps = map ( (\y -> MethodCall [] y "into" Nothing [] ())
+              , let exps = map ( (\y -> MethodCall [] y "marshal" Nothing [] ())
                                . mkPathExpr
                                . mkIdent
                                . ('y' :)
@@ -242,27 +291,27 @@ mkFromImpls dict
                              ]
               , let body = Struct [] (mkPath nTagged) flds'' Nothing ()
               ]
-      body2 = [ NoSemi (Match [] (mkPathExpr "x") arms2 ()) () ]
+      body2 = [ NoSemi (Match [] (mkPathExpr "self") arms2 ()) () ]
 
       -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
       --   From<Enum<T1, U1, ...> for TaggedUnion<T, U, ...> { ... }
       impl2 = Impl [] InheritedV Final Normal Positive
                    (mkGenerics fullImplBds) (Just fromEnumTr)
-                   taggedTy [mkFromFunc enumTy1 taggedTy body2] ()
+                   taggedTy1 [mkMarshalFunc taggedTy1 enumTy body1] ()
 
       
   pure (impl1, impl2)
-  where
-    mkFromTraitRef :: Ident -> [TyParam ()] -> TraitRef ()
-    mkFromTraitRef n t = TraitRef (mkGenPath "From" [ mkGenPathTy n (map tyParam2Ty t) ])
+    
+mkMarshalInto :: Ident -> [TyParam ()] -> TraitRef ()
+mkMarshalInto n t = TraitRef (mkGenPath "MarshalInto" [ mkGenPathTy n (map tyParam2Ty t) ])
 
-    mkFromFunc :: Ty () -> Ty () -> [Stmt ()] -> ImplItem ()
-    mkFromFunc argTy retTy body = let gen = mkGenerics []
-                                      arg = Arg (Just (mkIdentPat "x")) argTy ()
-                                      decl = FnDecl [arg] (Just retTy) False ()
-                                      sig = MethodSig Normal NotConst Rust decl 
-                                      blk = Block body Normal ()
-                                  in MethodI [] InheritedV Final "from" gen sig blk ()
+mkMarshalFunc :: Ty () -> Ty () -> [Stmt ()] -> ImplItem ()
+mkMarshalFunc _     retTy body = let gen = mkGenerics []
+                                     arg = SelfValue Immutable ()
+                                     decl = FnDecl [arg] (Just retTy) False ()
+                                     sig = MethodSig Normal NotConst Rust decl 
+                                     blk = Block body Normal ()
+                                     in MethodI [] InheritedV Final "marshal" gen sig blk ()
 
 -- | Extend the context with the type variables in the given dictionary.
 extendCtx :: TyVarDict -> Context -> Q Context

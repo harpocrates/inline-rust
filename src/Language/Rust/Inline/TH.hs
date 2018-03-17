@@ -6,26 +6,25 @@ import Language.Rust.Inline.TH.ReprC
 import Language.Rust.Inline.TH.Storable ( mkStorable )
 import Language.Rust.Inline.Context
 import Language.Rust.Inline.Internal
-
-import Data.Text.Prettyprint.Doc ( vsep, punctuate, line', layoutPretty, defaultLayoutOptions )
-import Data.Text.Prettyprint.Doc.Render.String ( renderString )
+import Language.Rust.Inline.Pretty
 
 import Language.Haskell.TH ( Name, Q, TypeQ, Type(ForallT) )
 import Language.Haskell.TH.Syntax ( addTopDecls )
 import Language.Haskell.TH.Lib ( appT, conT )
 import Language.Rust.Data.Ident ( Ident ) 
 import Language.Rust.Syntax ( Ty(PathTy), Path(..), PathSegment(..), PathParameters(..) )
-import Language.Rust.Pretty ( pretty' )
 
 import Data.Maybe  ( isJust, fromMaybe )
 import Data.Monoid ( First, Any(..) )
+import Data.List (intercalate)
 
 adtCtx :: Name         -- ^ name of the 'Storable' Haskell type 
        -> Ident        -- ^ name of the Rust type
        -> Maybe Ident  -- ^ name of the intermediate Rust type (if there is one)
        -> Int          -- ^ how many generic parameters
+       -> [String]     -- ^ impl's of @MarshalInto@
        -> Q Context
-adtCtx hADT rEnum rReprCOpt n = pure (Context ([ goRType ], [ goHType ]))
+adtCtx hADT rEnum rReprCOpt n impls = pure (Context ([ goRType ], [ goHType ], impls))
   where
   goRType :: RType -> Context -> First (Q HType, Maybe (Q RType))
   goRType rTy ctx = do
@@ -95,14 +94,13 @@ rustTyCtx tyq = do
   ctx <- peekContext 
 
   -- Generate and emit the Rust types
-  (rEnum, rReprCOpt, items) <- mkReprC ctx ty'
-  let doc = vsep . punctuate line' . map pretty' $ items
-  let itemsStr = renderString . layoutPretty defaultLayoutOptions $ doc
+  (rEnum, rReprCOpt, items, impls) <- mkReprC ctx ty'
+  let itemsStr = intercalate "\n\n" (map renderItem items)
   decs <- emitCodeBlock itemsStr
   addTopDecls decs
 
   -- Produce the context
-  adtCtx hADT rEnum rReprCOpt (length args)
+  adtCtx hADT rEnum rReprCOpt (length args) (map renderItem impls)
   
 
 
