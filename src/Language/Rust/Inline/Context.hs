@@ -59,6 +59,9 @@ newtype Context =
             -- Given a field in a Haskell ADT, we need to figure out which
             -- (not-necessarily @#[repr(C)]@) Rust type normally maps into this
             -- Haskell type.
+            
+            , [ String ]
+            -- Source for the trait impls of @MarshalTo@
             )
   deriving (Semigroup, Monoid, Typeable)
 
@@ -80,14 +83,14 @@ instance Monoid (Q Context) where
 --   2. The C-compatible Rust type have the same layout
 --
 lookupRTypeInContext :: RType -> Context -> First (Q HType, Maybe (Q RType))
-lookupRTypeInContext rustType context@(Context (rules, _)) =
+lookupRTypeInContext rustType context@(Context (rules, _, _)) =
   foldMap (\fits -> fits rustType context) rules
 
 -- | Search in a 'Context' for the Rust type corresponding to a Haskell type.
 -- Looking up the Rust type using 'lookupRTypeInContext' should yield the
 -- initial Haskell type again.
 lookupHTypeInContext :: HType -> Context -> First (Q RType)
-lookupHTypeInContext haskType context@(Context (_, rules)) =
+lookupHTypeInContext haskType context@(Context (_, rules, _)) =
   foldMap (\fits -> fits haskType context) rules
 
 -- | Partial version of 'lookupRTypeInContext' that fails with an error message
@@ -120,13 +123,28 @@ getHTypeInContext haskType context =
 mkContext :: [(Ty a, Q HType)] -> Q Context
 mkContext tys = do
     tys' <- traverse (\(rt,qht) -> fmap ((,) (void rt)) qht) tys
-    pure (Context (map fits tys', map rev tys'))
+    pure (Context ( map fits tys'
+                  , map rev tys'
+                  , map impl tys'
+                  ))
   where
     fits (rts, hts) rt _ | rt == rts = pure (pure hts, Nothing)
                          | otherwise = mempty
 
     rev (rts, hts) ht _  | ht == hts = pure (pure rts)
                          | otherwise = mempty
+
+
+    impl = implMarshalInto . fst 
+
+
+-- | Make a default @MarshalInto@ trait impl. (An identity impl)
+implMarshalInto :: Ty () -> String
+implMarshalInto t = unlines [ "impl MarshalInto<" ++ tyStr ++ "> for " ++ tyStr ++ " {"
+                             , "  fn marshal(self) -> " ++ tyStr ++ " { self }"
+                             , "}"
+                             ]
+  where tyStr = renderType t
 
 -- | Make a singleton 'Context' consisting of a rule to map the given Rust type
 -- to the given Haskell type.
@@ -225,7 +243,7 @@ ghcUnboxed = mkContext
 pointers :: Q Context
 pointers = do
     ptrConT <- [t| Ptr |]
-    pure (Context ([rule],[rev ptrConT]))
+    pure (Context ([rule],[rev ptrConT],[constPtr,mutPtr]))
   where
   rule pt context = do
     Ptr _ t _ <- pure pt
@@ -239,6 +257,16 @@ pointers = do
       else do
         t' <- lookupHTypeInContext t context
         pure (Ptr Mutable <$> t' <*> pure ())
+
+  constPtr = unlines [ "impl<T> MarshalInto<*const T> for *const T {"
+                     , "  fn marshal(self) -> *const T { self }"
+                     , "}"
+                     ]
+
+  mutPtr =   unlines [ "impl<T> MarshalInto<*mut T> for *mut T {"
+                     , "  fn marshal(self) -> *mut T { self }"
+                     , "}"
+                     ]
   
 -- | This maps a Rust function type into the corresponding 'FunPtr' wrapped
 -- Haskell function type.
@@ -251,7 +279,7 @@ pointers = do
 -- NOTE: function pointers will not support pointed types that require an intermediate
 --       Rust type.
 functions :: Q Context
-functions = pure (Context ([rule], undefined))
+functions = pure (Context ([rule], error "TODO", error "TODO"))
   where
   rule ft context = do
     BareFn _ C _ (FnDecl args retTy False _) _ <- pure ft

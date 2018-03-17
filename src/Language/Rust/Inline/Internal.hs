@@ -64,8 +64,12 @@ initModuleState contextMaybe = do
       -- add a hook to actually generate, compile, etc. the Rust file when we
       -- are done processing the module.
       addModFinalizer $ do
-        Just (ModuleState { codeBlocks = code, crates = deps }) <- getQ
-        let code' = unlines (reverse code)
+        Just (ModuleState { codeBlocks = code
+                          , crates = deps
+                          , getContext = Context (_,_,impls) }) <- getQ
+        
+        let marshalIntoTrait = "trait MarshalInto<T> { fn marshal(self) -> T; }"
+        let code' = unlines (marshalIntoTrait : reverse (code ++ impls))
 
         -- If there are no dependencies, run `rustc`. Else, go through `cargo`
         -- and store dependencies in `.inline-rust-quasi` folder.
