@@ -20,7 +20,7 @@ import Language.Rust.Inline.Pretty ( renderType )
 
 import Language.Rust.Quote         ( ty )
 import Language.Rust.Syntax        ( Ty(BareFn, Ptr), Abi(..), FnDecl(..),
-                                     Arg(..), Mutability(..) )
+                                     Arg(..), Mutability(..), Unsafety(..) )
 
 import Language.Haskell.TH 
 
@@ -279,7 +279,10 @@ pointers = do
 -- NOTE: function pointers will not support pointed types that require an intermediate
 --       Rust type.
 functions :: Q Context
-functions = pure (Context ([rule], error "TODO", error "TODO"))
+functions = do
+  funPtrT <- [t| FunPtr |]
+  ioT <- [t| IO |]
+  pure (Context ([rule], [rev funPtrT ioT], [impl]))
   where
   rule ft context = do
     BareFn _ C _ (FnDecl args retTy False _) _ <- pure ft
@@ -300,4 +303,41 @@ functions = pure (Context ([rule], error "TODO", error "TODO"))
     let hFunPtr = [t| FunPtr $hFunTy |]
 
     pure (hFunPtr, Nothing)
+
+  rev funPtrT ioT ft context = do
+    AppT funPtr t <- pure ft
+    if funPtr /= funPtrT
+      then mempty
+      else do
+        let ts = getApps t
+            args = init ts
+
+            ret   = last ts
+            ret'  = case ret of
+                      AppT io r | io == ioT -> r
+                      r -> r
+            ret'' = case ret' of
+                      TupleT 0 -> Nothing
+                      r -> Just r
+
+
+        argsRs <- traverse (`lookupHTypeInContext` context) args
+        retRs <- traverse (`lookupHTypeInContext` context) ret''
+        
+        let argsRs' :: Q [Arg ()]
+            argsRs' = map (\a -> Arg Nothing a ()) <$> sequence argsRs
+        let decl = FnDecl <$> argsRs' <*> sequence retRs <*> pure False <*> pure ()
+        pure (BareFn Normal C [] <$> decl <*> pure ())
+
+  getApps :: Type -> [Type]
+  getApps (AppT e1 e2) = e1 : getApps e2
+  getApps e = [e]
+
+
+  -- TODO more arguments return types
+  impl :: String
+  impl = unlines [ "impl<T,U> MarshalInto<extern \"C\" fn(T) -> U> for (extern \"C\" fn(T) -> U) {"
+                 , "  fn marshal(self) -> (extern \"C\" fn(T) -> U) { self }"
+                 , "}"
+                 ]
 
