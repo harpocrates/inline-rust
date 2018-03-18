@@ -326,13 +326,12 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
                | otherwise = haskCallIO
 
   -- Generate the Rust function arguments and the converted arguments
-  let (rustArgs', rustConvertedArgs) = unzip $ mergeArgs <$> rustArgs <*> reprCArgs
+  let (rustArgs', rustConvertedArgs) = unzip $ zipWith mergeArgs rustArgs reprCArgs
       (rustRet', rustConvertedRet) = mergeArgs rustRet reprCRet
       
      -- mergeArgs :: Ty Span -> Maybe RType -> (Ty Span, Ty Span)
       mergeArgs t Nothing       = (t, t)
       mergeArgs t (Just tInter) = (fmap (const mempty) tInter, t)
-  
   
   -- Generate the Rust function.
   let (retArg, retTy, ret)
@@ -347,10 +346,10 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   void . emitCodeBlock . unlines $
     [ "#[no_mangle]"
     , "pub extern \"C\" fn " ++ qqStrName ++ "("
-    , intercalate ", " ([ s ++ ": " ++ marshal (renderType t)
-                        | (s,t,v) <- zip3 rustArgNames rustArgs' argsByVal
-                        , let marshal x = if v then x else "*const " ++ x
-                        ] ++ retArg)
+    , "  " ++ intercalate ", " ([ s ++ ": " ++ marshal (renderType t)
+                                | (s,t,v) <- zip3 rustArgNames rustArgs' argsByVal
+                                , let marshal x = if v then x else "*const " ++ x
+                                ] ++ retArg)
     , ") -> " ++ retTy ++ " {"
     , unlines [ "  let " ++ s ++ ": " ++ renderType t ++ " = " ++ marshal s ++ ".marshal();"
               | (s,t,v) <- zip3 rustArgNames rustConvertedArgs argsByVal

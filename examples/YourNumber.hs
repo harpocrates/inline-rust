@@ -15,7 +15,7 @@ externCrate "rayon" "0.9"
 [rust|
 fn hi_from_rust(n: u16) -> () {
   print!("hi");
-  for i in 2..n {
+  for i in 1..n {
     print!(" hi")
   }
   println!()
