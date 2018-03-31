@@ -20,12 +20,13 @@ import Language.Rust.Inline.Context
 
 import Language.Haskell.TH hiding (Stmt, Match, WildP, Unsafe, LitP, Pat)
 import Language.Rust.Syntax
-import Language.Rust.Data.Ident            ( Ident, mkIdent )
+import Language.Rust.Data.Ident            ( Ident(..), mkIdent )
 import qualified Language.Rust.Quote as R
 
 import Control.Monad                       ( void )
 import Data.Traversable                    ( for )
 import Data.List.NonEmpty                  ( NonEmpty(..) )
+import Data.Char                           ( toUpper )
 
 -- | TODO mangle me
 freshIdent :: String -> Q Ident
@@ -149,21 +150,28 @@ mkMarshalStructImpl :: TyVarDict
                     -> Q ( Item () )
 mkMarshalStructImpl dict nStruct n = do
   let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
-      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> "1") [] Nothing ())
-                        | (_, TyParam _ i _ _ _) <- dict
+      ts, ts1 :: [TyParam ()]
+      (ts, ts1) = unzip [ (mkTyParam i', mkTyParam (i' <> "1"))
+                        | (_, TyParam _ (Ident i _) _ _ _) <- dict
+                        , let i' = mkIdent (map toUpper i)
                         ]
 
-      -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
+      -- type parameters: @T1 + MarshalInto<T>, U1 + MarshalInto<U>, ...@
       ts1BoundIntoT = zipWith consBound (map (marshalBound . tyParam2Ty) ts) ts1
 
-      -- full parameters: @T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...@ 
+      -- Full type parameter bounds.
+      --
+      -- @
+      --    T:  Copy,                  U:  Copy,                  ...,
+      --    T1: Copy + MarshalInto<T>, U1: Copy + MarshalInto<U>, ...
+      -- @
+      fullImplBds :: [TyParam ()]
       fullImplBds = map (consBound copyBound) (ts ++ ts1BoundIntoT)
 
-      -- MarshalInto<TaggedUnion<T, U, ...>>
+      -- MarshalInto<MyStruct<T, U, ...>>
       marshalIntoStruct = mkMarshalInto nStruct ts
 
-
-      -- Enum<T1, U1, ...> and TaggedUnion<T, U, ...>
+      -- MyStruct<T1, U1, ...> and MyStruct<T, U, ...>
       structTy1 = mkGenPathTy nStruct (map tyParam2Ty ts1)
       structTy = mkGenPathTy nStruct (map tyParam2Ty ts)
 
@@ -462,3 +470,4 @@ mkVariant ctx tys = do
   rustTys <- traverse (`getHTypeInContext` ctx) tys
   let structFlds = [ StructField Nothing InheritedV t [] () | t <- rustTys ]
   pure (TupleD structFlds ())
+

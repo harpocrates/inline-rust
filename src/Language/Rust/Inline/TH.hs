@@ -84,7 +84,7 @@ rustTyCtx tyq = do
   (_, ty) <-
     case ty' of
       ForallT tyvars [] t -> pure (tyvars, t)
-      ForallT _      _  _ -> fail "mkReprC: type cannot have context"
+      ForallT _      _  _ -> fail "rustTyCtx: type cannot have context"
       t                   -> pure ([], t)
 
   -- Get the type and its name

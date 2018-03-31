@@ -29,6 +29,7 @@ library
   exposed-modules:     Language.Rust.Inline
                        Language.Rust.Inline.TH
   other-modules:       Language.Rust.Inline.Context
+                       Language.Rust.Inline.Context.Prelude
                        Language.Rust.Inline.Marshal
                        Language.Rust.Inline.Parser
                        Language.Rust.Inline.Pretty
