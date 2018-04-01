@@ -15,6 +15,7 @@ Portability : GHC
                                    -- TODO: GHC feature around setting extensions from within TH
 module Language.Rust.Inline.TH.Storable (
   mkStorable,
+  mkTupleStorable,
 ) where
 
 import Language.Rust.Inline.TH.Utilities
@@ -55,10 +56,36 @@ mkStorable tyq = do
   (_,cons') <- getConstructors ty'
 
   -- Produce the instance
-  methods <- processADT cons' 
+  methods <- processADT [ (nameCon n, tyArgs) | (n,tyArgs) <- cons' ] 
   dec <- instanceD (pure ctx) (pure (AppT storable ty')) (map pure methods)
   pure [dec]
 
+mkTupleStorable :: Int     -- ^ arity of tuple
+                -> Q [Dec] -- ^ the instance declaration
+mkTupleStorable n = do
+  storable <- [t| Storable |]
+  tyVars <- sequence (take n [ newName (c : show i)
+                             | i <- [(1 :: Int)..]
+                             , c <- ['a'..'z']
+                             ])
+  let ctx = [ AppT storable (VarT tyVar) | tyVar <- tyVars ]
+  let instHead = AppT storable (foldl AppT (TupleT n) (map VarT tyVars))
+
+  methods <- processADT [ (tupCon, map VarT tyVars) ]
+  let dec = InstanceD Nothing ctx instHead methods
+  pure [dec]
+
+-- * Constructor utilities
+data Constructor = Constructor
+  { conPat :: [Pat] -> Pat
+  , conExp :: [Exp] -> Exp
+  }
+
+nameCon :: Name -> Constructor
+nameCon n = Constructor (ConP n) (foldl AppE (ConE n))
+
+tupCon :: Constructor
+tupCon = Constructor TupP TupE 
 
 -- * Alignment
 
@@ -115,7 +142,7 @@ listTE = TExp . ListE . map unType
 --        return (Con f1 f2 ... fn)
 -- @
 --
-peekCon :: Name              -- ^ name of the constructor
+peekCon :: Constructor       -- ^ name of the constructor
         -> [Exp -> Q Exp]    -- ^ how to peek every field
         -> Name              -- ^ the base pointer
         -> Q Exp             -- ^ a 'do' expression for peeking the constructor
@@ -124,7 +151,7 @@ peekCon con peekFields ptr = do
     for peekFields $ \fldCont -> do
        n <- newName "n"
        pure (varE n, bindS (varP n) (fldCont (VarE ptr)))
-  let ret = [e| return $(appsE (conE con : ns)) |]
+  let ret = [e| return $(conExp con <$> sequence ns) |]
   doE (binds ++ [noBindS ret])
 
 -- | Produces a 'do' block for poking a constructor, along with a pattern for
@@ -137,7 +164,7 @@ peekCon con peekFields ptr = do
 --        ...
 --        ... ptr fn
 -- @
-pokeCon :: Name              -- ^ name of the constructor
+pokeCon :: Constructor       -- ^ name of the constructor
         -> [Exp -> Q Exp]    -- ^ how to poke every field
         -> Name              -- ^ the base poniter
         -> Q (Pat, Exp)      -- ^ a pattern to match, an expression for poking
@@ -146,7 +173,7 @@ pokeCon con pokeFields ptr = do
     for pokeFields $ \fldCont -> do
         n <- newName "n"
         pure (varP n, noBindS [e| $(fldCont (VarE ptr)) $(varE n) |])
-  pat <- conP con ns
+  pat <- conPat con <$> sequence ns
   expr <- if null stmts then [e| pure () |] else doE stmts
   return (pat, expr)
 
@@ -202,8 +229,8 @@ processField ty = do
 -- | Process an algebraic data type.
 --
 -- TODO: think about the zero constructor case...
-processADT :: [(Name, [Type])]  -- ^ constructors and the types of their fields
-           -> Q [Dec]           -- ^ methods of the 'Storable' class
+processADT :: [(Constructor, [Type])]  -- ^ constructors and the types of their fields
+           -> Q [Dec]                  -- ^ methods of the 'Storable' class
 
 -- The one constructor case is special - we don't need to specify a tag
 processADT [(con, fields)] = do
@@ -237,9 +264,9 @@ processADT [(con, fields)] = do
   -- poke
   poke_ <- do
     ptr <- newName "ptr"
-    (conPat,body) <- pokeCon con pokeFields ptr
+    (cPat,body) <- pokeCon con pokeFields ptr
     Just pokeN <- lookupValueName "poke"
-    funD pokeN [clause [varP ptr, pure conPat] (normalB (pure body)) ds']
+    funD pokeN [clause [varP ptr, pure cPat] (normalB (pure body)) ds']
 
   pure [sizeOf_, alignment_, peek_, poke_]
 

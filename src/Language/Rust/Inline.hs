@@ -54,6 +54,7 @@ module Language.Rust.Inline (
   ghcUnboxed,
   functions,
   pointers,
+  prelude,
   -- ** Marshalling
   with,
   alloca,
@@ -75,6 +76,7 @@ module Language.Rust.Inline (
 ) where
 
 import Language.Rust.Inline.Context 
+import Language.Rust.Inline.Context.Prelude  ( prelude ) 
 import Language.Rust.Inline.Internal
 import Language.Rust.Inline.Marshal
 import Language.Rust.Inline.Parser
@@ -355,7 +357,7 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
               | (s,t,v) <- zip3 rustArgNames rustConvertedArgs argsByVal
               , let marshal x = if v then x else "unsafe { std::ptr::read(" ++ x ++ ") }"
               ]
-    , "  let out: " ++ renderType rustConvertedRet ++ " = " ++ renderTokens rustBody ++ ";"
+    , "  let out: " ++ renderType rustConvertedRet ++ " = (|| {" ++ renderTokens rustBody ++ "})();"
     , "  " ++ ret
     , "}"
     ]

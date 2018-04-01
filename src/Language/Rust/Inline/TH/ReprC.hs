@@ -214,8 +214,9 @@ mkMarshalEnumImpls dict
             nEnum nVariants = do
   
   let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
-      (ts, ts1) = unzip [ (TyParam [] i [] Nothing (), TyParam [] (i <> "1") [] Nothing ())
-                        | (_, TyParam _ i _ _ _) <- dict
+      (ts, ts1) = unzip [ (TyParam [] i' [] Nothing (), TyParam [] (i' <> "1") [] Nothing ())
+                        | (_, TyParam _ (Ident i _) _ _ _) <- dict
+                        , let i' = mkIdent (map toUpper i)
                         ]
 
       -- type parameters with @Into@ bound: @T1 + Into<T>, U1 + Into<U>, ...@
@@ -352,7 +353,9 @@ mkEnum :: Context           -- ^ current context (in order to lookup what Rust t
 mkEnum ctx dict n cons = do
   let itemN = mkIdent (nameBase n)
       ps = [ typ  | (_, typ) <- dict ]
-      outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- ps ]
+      outTy = mkGenPathTy itemN [ mkPathTy i' | TyParam _ (Ident i _) _ _ _ <- ps
+                                              , let i' = mkIdent (map toUpper i)
+                                              ]
   
   (varNs, vars) <- fmap unzip $
     for cons $ \(nCon, flds) -> do
@@ -394,7 +397,9 @@ mkUnion dict n tys = do
                ]
       var = StructD fields ()
       union = Union [reprC, deriveCopyClone] PublicV itemN var (mkGenerics copyPs) ()
-      outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- copyPs ]
+      outTy = mkGenPathTy itemN [ mkPathTy i' | TyParam _ (Ident i _) _ _ _ <- copyPs
+                                              , let i' = mkIdent (map toUpper i)
+                                              ]
 
   pure (outTy, itemN, union)
 
@@ -425,7 +430,9 @@ mkTagged dict n disc union = do
                ]
       var = StructD fields ()
       struct = StructItem [reprC, deriveCopyClone] PublicV itemN var (mkGenerics copyPs) ()
-      outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- copyPs ]
+      outTy = mkGenPathTy itemN [ mkPathTy i' | TyParam _ (Ident i _) _ _ _ <- copyPs
+                                              , let i' = mkIdent (map toUpper i)
+                                              ]
 
   pure (outTy, itemN, struct)
 
@@ -458,7 +465,9 @@ mkStruct ctx dict copy n tys = do
                | (ht, typ) <- dict, ht `elem` haskTysUsed
                ]
       struct = StructItem [reprC, deriveCopyClone] PublicV itemN var (mkGenerics copyPs) ()
-      outTy = mkGenPathTy itemN [ mkPathTy i | TyParam _ i _ _ _ <- copyPs ]
+      outTy = mkGenPathTy itemN [ mkPathTy i' | TyParam _ (Ident i _) _ _ _ <- copyPs
+                                              , let i' = mkIdent (map toUpper i)
+                                              ]
 
 
   pure (outTy, (itemN, length tys), struct)
