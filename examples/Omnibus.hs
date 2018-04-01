@@ -23,7 +23,6 @@ main = do
   str <- newCString "göes to élevên"
   let n = [rust| libc::uint32_t {
     use std::ffi::CStr;
-    use std::str;
 
     let c_str = unsafe {
       let s = $(str: *const libc::c_char);

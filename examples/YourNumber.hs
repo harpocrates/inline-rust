@@ -6,16 +6,13 @@ import Language.Rust.Inline
 import Foreign.Ptr
 import Data.Int (Int32, Int64)
 
-
 setContext (basic <> functions)
-
-externCrate "rayon" "0.9"
 
 -- Top-level functions - accessible from all quasiquotes
 [rust|
 fn hi_from_rust(n: u16) -> () {
   print!("hi");
-  for i in 1..n {
+  for _ in 1..n {
     print!(" hi")
   }
   println!()

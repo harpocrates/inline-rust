@@ -127,7 +127,7 @@ tupleContext n = pure (Context ([rule],[rev],tupleItems n))
   getTupTy acc (TupleT n) | length acc == n = Just (reverse acc)
   getTupTy acc (AppT t1 t2) = getTupTy (t2:acc) t1
   getTupTy acc (ParensT t) = getTupTy acc t
-  getTupTy _ _ = Nothing 
+  getTupTy _ _ = Nothing
 
 
 maybeItems :: [String]

@@ -32,9 +32,9 @@ main = do
       let mut x = 0i32;
       let mut y = 0i32;
       for (&m,&p) in ms.iter().zip(ps.iter()) {
-        if let Some(multipler) = m {
+        if let Some(multiplier) = m {
           let Point(mx, my) = p;
-          mx.map(|px| x += px);
+          mx.map(|px| x += multiplier * px);
           my.map(|py| y += py);
         }
       }

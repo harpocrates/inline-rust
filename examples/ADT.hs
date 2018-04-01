@@ -14,8 +14,6 @@ data Point a = Point a a deriving (Show)
 
 -- Make some 'Storable' instances
 mkStorable [t| forall a. Storable a => Storable (Point a) |]
-mkStorable [t| forall a. Storable a => Storable (Maybe a) |]
-mkStorable [t| forall e a. (Storable e, Storable a) => Storable (Either e a) |]
 
 -- Generate corresponding Rust types
 extendContext (rustTyCtx [t| forall a. Point a |])
@@ -81,9 +79,9 @@ main = do
       let mut x = 0i32;
       let mut y = 0i32;
       for (&m,&p) in ms.iter().zip(ps.iter()) {
-        if let Maybe::Just(multipler) = m {
+        if let Maybe::Just(multiplier) = m {
           let Point(mx, my) = p;
-          mx.map(|px| x += px);
+          mx.map(|px| x += multiplier * px);
           my.map(|py| y += py);
         }
       }

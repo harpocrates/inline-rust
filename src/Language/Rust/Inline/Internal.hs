@@ -68,9 +68,8 @@ initModuleState contextMaybe = do
                           , crates = deps
                           , getContext = Context (_,_,impls) }) <- getQ
        
-        let libcStuff = "#![feature(libc)] extern crate libc;"
         let marshalIntoTrait = "trait MarshalInto<T> { fn marshal(self) -> T; }"
-        let code' = unlines (libcStuff : marshalIntoTrait : reverse (code ++ impls))
+        let code' = unlines (reverse code ++ [marshalIntoTrait] ++ impls)
 
         -- If there are no dependencies, run `rustc`. Else, go through `cargo`
         -- and store dependencies in `.inline-rust-quasi` folder.

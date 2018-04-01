@@ -118,7 +118,7 @@ mkReprC ctx ty = do
       t                   -> pure ([], t)
 
   -- Synthesize the new generic args and the mapping
-  rustTyParams <- traverse (fmap mkTyParam . freshIdent . nameBase . varName) tyvars
+  rustTyParams <- traverse (fmap mkTyParam . freshIdent . map toUpper . nameBase . varName) tyvars
   let dict :: TyVarDict
       dict = zip (map varName tyvars) rustTyParams
 
@@ -246,15 +246,14 @@ mkMarshalEnumImpls dict
                                . show )
                                [0..(n-1)]
               , let access = FieldAccess [] (mkPathExpr "payload") (mkIdent ("v" ++ show i)) () 
-              , let pat2 = if null vars
-                             then PathP Nothing (mkPath s) ()
-                             else TupleStructP (mkPath s) vars Nothing ()
-              , let stmts = [ Local pat2 Nothing (Just access) [] ()
-                            , if n == 0
+              , let pat2 = [ TupleStructP (mkPath s) vars Nothing () | not (null vars) ] 
+              , let stmts = [ Local p Nothing (Just access) [] () | p <- pat2 ] ++
+                            [ if n == 0
                                 then NoSemi (mkPathExpr' [nEnum, v]) ()
                                 else NoSemi (Call [] (mkPathExpr' [nEnum, v]) exps ()) ()
                             ]
-              , let body = BlockExpr [] (Block stmts Unsafe ()) ()
+              , let safety = if null vars then Normal else Unsafe
+              , let body = BlockExpr [] (Block stmts safety ()) ()
               ] ++ [ mkArm (WildP ()) (void [R.expr| panic!("Unexpected tag!") |]) ]
       body1 = [ Local (StructP (mkPath nTagged) flds False ())
                       Nothing
@@ -326,7 +325,7 @@ mkMarshalFunc _     retTy body = let gen = mkGenerics []
 extendCtx :: TyVarDict -> Context -> Q Context
 extendCtx dict ctx = dictCtx <> pure ctx
   where
-    dictCtx = mkContext [ (mkPathTy i, varT v)
+    dictCtx = mkContext [ (mkPathTy i, varT v, False)
                         | (v, TyParam _ i _ _ _) <- dict
                         ]
 

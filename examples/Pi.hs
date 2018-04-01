@@ -23,7 +23,7 @@ piApprox x = [rust|
     let mut approximation = 0.0;
     let mut multiplier = 1.0;
 
-    for i in (0 .. $(x: i64)) {
+    for i in 0..$(x: i64) {
       approximation += multiplier / (2 * i + 1) as f64;
       multiplier *= -1.0;
     }
