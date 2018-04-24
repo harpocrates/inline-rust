@@ -54,7 +54,7 @@ ghcMarshallable ty = do
             , [t| Double |], [t| Double# |]
             , [t| Float  |], [t| Float#  |]
             
-            , [t| Bool |], [t| () |]
+            , [t| Bool |], [t| () |] -- TODO: let through `IO ()` but not `()`
             
             , [t| Int8  |], [t| Int16  |], [t| Int32  |], [t| Int64  |]
             , [t| Word8 |], [t| Word16 |], [t| Word32 |], [t| Word64 |]

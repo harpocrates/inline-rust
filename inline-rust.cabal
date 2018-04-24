@@ -57,3 +57,13 @@ library
                      , directory            >=1.3.0.0
                      , bytestring           >=0.10
 
+test-suite spec
+  hs-source-dirs:      tests
+  main-is:             Main.hs
+  
+  type:                exitcode-stdio-1.0
+  default-language: Haskell2010
+  other-modules:       SimpleTypes
+  build-depends:       base
+                     , inline-rust
+                     , hspec
