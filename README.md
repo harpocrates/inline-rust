@@ -39,7 +39,8 @@ latter, you can install one of GHC's nightly builds.
 
 With that installed, something like the following should work
 
-    $ cabal new-build -w /usr/local/bin/ghc-8.5.20180423 
+    $ cabal new-build -w /usr/local/bin/ghc-8.5.20180423
+    $ cabal new-test  -w /usr/local/bin/ghc-8.5.20180423
 
 Running the examples is only a matter of threading through the right package
 databases. With a new enough Cabal, `new-exec` does this for you.
