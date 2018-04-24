@@ -47,7 +47,7 @@ library
                      , ScopedTypeVariables
 
   build-depends:       base                 >=4.9 && <5.0
-                     , language-rust        >=0.1.1
+                     , language-rust        >=0.2.0
                      , prettyprinter        >=1.1
                      , process              >=1.4
                      , transformers         >=0.5 && <0.6
@@ -59,6 +59,7 @@ library
 
 test-suite spec
   hs-source-dirs:      tests
+  ghc-options:         -threaded
   main-is:             Main.hs
   
   type:                exitcode-stdio-1.0

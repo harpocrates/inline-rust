@@ -1,0 +1,34 @@
+# Sudo used for custom apt setup
+sudo: true
+
+# Manually install ghc and cabal
+before_install:
+  - which ld
+  - ld --version
+  - sudo rm /bin/sh
+  - sudo ln -s /bin/bash /bin/sh
+  - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
+  - travis_retry sudo apt-get update
+  - travis_retry sudo apt-get install cabal-install-head
+  - travis_retry sudo apt-get install binutils 
+  - travis_retry curl https://ghc-artifacts.s3.amazonaws.com/nightly/validate-x86_64-linux/latest/bindist.tar.xz --output latest.tar.xz
+  - tar xpvf latest.tar.xz
+  - cd ghc-*
+  - ./configure 
+  - sudo make V=1 install
+  - curl https://sh.rustup.rs -sSf | sudo sh -s -- -y
+  - cd ..
+  - export PATH=/usr/local/bin:/opt/cabal/head/bin:~/.cargo/bin:$PATH
+
+# Install Happy and Alex first, before installing
+install:
+  - echo $PATH
+  - cabal --version
+  - ghc --version
+  - rustc --version
+  - cargo --version
+  - cabal new-update
+  - cabal new-build --enable-tests --allow-newer
+
+script:
+  - cabal new-test --allow-newer
