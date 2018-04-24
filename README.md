@@ -30,19 +30,21 @@ If you want to use this with GHCi, make sure to pass in `-fobject-code`.
 ## Building
 
 This currently depends on a GHC [feature][1] that will be available in GHC 8.6.
-Until then, you'll have to [build GHC][0] yourself. Assuming you've done this,
-you should be able to build with `new-build`.
+Until then, you'll have to [build GHC][0] yourself or get a binary. For the
+latter, you can install one of GHC's nightly builds.
 
-    $ cabal new-build -w /usr/local/bin/ghc-head
+    $ curl https://ghc-artifacts.s3.amazonaws.com/nightly/validate-x86_64-darwin/latest/bindist.tar.xz | tar xz
+    $ cd ghc-*
+    $ ./configure && make install
+
+With that installed, something like the following should work
+
+    $ cabal new-build -w /usr/local/bin/ghc-8.5.20180423 
 
 Running the examples is only a matter of threading through the right package
-databases.
+databases. With a new enough Cabal, `new-exec` does this for you.
 
-    $ /usr/local/bin/ghc-head \
-      -package-db $HOME/.cabal/store/ghc-head/package.db \
-      -package-db dist-newstyle/packagedb/ghc-head \
-      -threaded \
-      examples/Hello.hs
+    $ cabal new-exec -w /usr/local/bin/ghc-8.5.20180423 ghc -- -threaded examples/Hello.hs
     [1 of 1] Compiling Main             ( examples/Hello.hs, examples/Hello.o )
     Linking examples/Hello ...
     $ ./examples/Hello
