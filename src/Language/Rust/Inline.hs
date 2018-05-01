@@ -87,7 +87,7 @@ import Language.Rust.Inline.TH.ReprC         ( mkReprC )
 import Language.Haskell.TH.Syntax
 import Language.Haskell.TH.Lib
 import Language.Haskell.TH.Quote             ( QuasiQuoter(..) )
-
+import Language.Haskell.TH                   ( pprParendType )
 
 import Foreign.Marshal.Utils                 ( with, new )
 import Foreign.Marshal.Alloc                 ( alloca, free ) 
@@ -95,7 +95,7 @@ import Foreign.Marshal.Array                 ( withArrayLen, newArray )
 import Foreign.Marshal.Unsafe                ( unsafeLocalState )
 import Foreign.Ptr                           ( freeHaskellFunPtr, Ptr )
 
-import Control.Monad                         ( void )
+import Control.Monad                         ( void, when )
 import Data.List                             ( intercalate )
 import Data.Traversable                      ( for )
 
@@ -277,19 +277,25 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   (haskArgs, reprCArgs) <- unzip <$> traverse (getRType . void) rustArgs
 
   -- Convert the Haskell return type to a marshallable FFI type
-  (retByVal, haskRet') <- do
-    marshallable <- ghcMarshallable haskRet
+  (retByVal, inIO, haskRet') <- do
+    (marshallable, unlifted) <- ghcMarshallable haskRet
     if marshallable
-      then pure (True, [t| IO $(pure haskRet) |])
-      else pure (False, [t| Ptr $(pure haskRet) -> IO () |])
+      then if unlifted
+             then pure (True, False, pure haskRet)
+             else pure (True, True, [t| IO $(pure haskRet) |])
+      else pure (False, True, [t| Ptr $(pure haskRet) -> IO () |])
     
   -- Convert the Haskell arguments to marshallable FFI types
   (argsByVal, haskArgs') <- fmap unzip $
     for haskArgs $ \haskArg -> do
-      marshallable <- ghcMarshallable haskArg
+      (marshallable, unlifted) <- ghcMarshallable haskArg
       if marshallable
         then pure (True, haskArg)
         else do ptr <- [t| Ptr $(pure haskArg) |]
+                when unlifted $
+                  let argTy = show (pprParendType haskArg)
+                      msg = "Cannot pass unmarshallable and unlifted type "
+                  in fail (msg ++ argTy)
                 pure (False, ptr)
 
   -- Generate the Haskell FFI import declaration and emit it
@@ -323,9 +329,11 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
                           [e| with $(varE argName) (\( $(varP x) ) ->
                                 $(goArgs (varE x : acc) args)) |]
 
-  let haskCallIO = goArgs [] (rustArgNames `zip` argsByVal)
-      haskCall | isPure = [e| unsafeLocalState $haskCallIO |]
-               | otherwise = haskCallIO
+  let haskCall' = goArgs [] (rustArgNames `zip` argsByVal)
+      haskCall = case (isPure, inIO) of
+                   (True,  True)  -> [e| unsafeLocalState $haskCall' |]
+                   (False, False) -> [e| pure $haskCall' |]
+                   _              -> haskCall'
 
   -- Generate the Rust function arguments and the converted arguments
   let (rustArgs', rustConvertedArgs) = unzip $ zipWith mergeArgs rustArgs reprCArgs

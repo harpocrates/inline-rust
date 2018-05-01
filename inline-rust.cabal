@@ -20,7 +20,6 @@ source-repository head
   type:              git
   location:          https://github.com/harpocrates/inline-rust.git
 
-
 library
   hs-source-dirs:      src
   ghc-options:         -Wall -Werror
@@ -60,11 +59,14 @@ library
 test-suite spec
   hs-source-dirs:      tests
   ghc-options:         -threaded
+  extra-libraries:     System resolv c m
   main-is:             Main.hs
   
   type:                exitcode-stdio-1.0
   default-language: Haskell2010
   other-modules:       SimpleTypes
+                     , GhcUnboxedTypes
   build-depends:       base
                      , inline-rust
                      , hspec
+                     , ghc-prim

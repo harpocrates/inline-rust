@@ -8,14 +8,18 @@ import Data.Int
 import Data.Word
 
 simpleTypes :: Spec
-simpleTypes = describe "Simple contexts" $ do
+simpleTypes = describe "Simple types" $ do
   it "Can marshal a Char argument/return" $ do
     let x = 'a'
     [rust| char { $(x: char).to_uppercase().next().unwrap() } |] `shouldBe` 'A'
   
-  it "Can marshal  argument/return" $ do
-    let x = 'a'
-    [rust| char { $(x: char).to_uppercase().next().unwrap() } |] `shouldBe` 'A'
+{-  it "Can marshal an Word argument/return" $ do
+    let x = 3 :: Word
+    [rust| usize { !$(x: usize) + 4 } |] `shouldBe` (x + 4)
+  
+  it "Can marshal a Int argument/return" $ do
+    let x = -3 :: Int
+    [rust| isize { !$(x: isize) + 4 } |] `shouldBe` (x + 4) -}
   
   it "Can marshal an Int8 argument/return" $ do
     let x = -3 :: Int8

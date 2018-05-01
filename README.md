@@ -1,5 +1,7 @@
 # inline-rust
 
+[![Build Status](https://travis-ci.org/harpocrates/inline-rust.svg?branch=master)](https://travis-ci.org/harpocrates/inline-rust)
+
 This package allows you to write Rust inline in your Haskell source using
 quasiquotes. Here is a short example. For more examples, check out the
 [examples](examples) folder.
@@ -45,7 +47,7 @@ With that installed, something like the following should work
 Running the examples is only a matter of threading through the right package
 databases. With a new enough Cabal, `new-exec` does this for you.
 
-    $ cabal new-exec -w /usr/local/bin/ghc-8.5.20180423 ghc -- -threaded examples/Hello.hs
+    $ cabal new-exec -w /usr/local/bin/ghc-8.5.20180423 ghc -- -threaded -package inline-rust examples/Hello.hs
     [1 of 1] Compiling Main             ( examples/Hello.hs, examples/Hello.o )
     Linking examples/Hello ...
     $ ./examples/Hello

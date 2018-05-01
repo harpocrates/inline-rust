@@ -13,11 +13,11 @@ before_install:
   - cd ghc-*
   - ./configure 
   - sudo make V=1 install
-  - curl https://sh.rustup.rs -sSf | sudo sh -s -- -y
   - cd ..
+  - curl https://sh.rustup.rs -sSf | sudo sh -s -- -y
   - export PATH=/usr/local/bin:/opt/cabal/head/bin:~/.cargo/bin:$PATH
 
-# Install Happy and Alex first, before installing
+# Build the project and test suite 
 install:
   - echo $PATH
   - cabal --version
@@ -25,7 +25,7 @@ install:
   - rustc --version
   - cargo --version
   - cabal new-update
-  - cabal new-build --enable-tests --allow-newer --with-ld=lld
+  - cabal new-build --enable-tests --allow-newer
 
 script:
-  - cabal new-test --allow-newer --with-ld=lld
+  - cabal new-test --allow-newer

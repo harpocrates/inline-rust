@@ -32,43 +32,58 @@ import Data.Array.Storable         ( StorableArray, Ix, withStorableArray,
 
 import GHC.Exts
 
--- | Identify which types can be marshalled by the GHC FFI. A negative response
--- doesn't mean the type can't be marshalled - just that we aren't sure it can.
+-- | Identify which types can be marshalled by the GHC FFI and which types are
+-- unlifted. A negative response to the first of these questions doesn't mean
+-- the type can't be marshalled - just that we aren't sure it can.
 --
 -- This is based on section 8.4.2 (Foreign Types) of Haskell2010 and section
 -- 11.1.1 (Unboxed types) of the GHC manual. We could do a better job here by
 -- also letting through type synonyms / newtypes.
-ghcMarshallable :: Type -> Q Bool
+ghcMarshallable :: Type -> Q (Bool, Bool)
 ghcMarshallable ty = do
-   simple <- sequence qSimple
-   tycons <- sequence qTycons
+   simpleU <- sequence qSimpleUnboxed
+   simpleB <- sequence qSimpleBoxed
+   tyconsU <- sequence qTyconsUnboxed
+   tyconsB <- sequence qTyconsBoxed
 
    case ty of
-     _          | ty `elem` simple  -> pure True
-     AppT con _ | con `elem` tycons -> pure True
-     _                              -> pure False
+     _          | ty  `elem` simpleU -> pure (True, True)
+                | ty  `elem` simpleB -> pure (True, False)
+     AppT con _ | con `elem` tyconsU -> pure (True, True)
+                | con `elem` tyconsB -> pure (True, False)
+     _                              -> pure (False, False)
   where
-  qSimple = [ [t| Char   |], [t| Char#   |] 
-            , [t| Int    |], [t| Int#    |]
-            , [t| Word   |], [t| Word#   |]
-            , [t| Double |], [t| Double# |]
-            , [t| Float  |], [t| Float#  |]
-            
-            , [t| Bool |], [t| () |] -- TODO: let through `IO ()` but not `()`
-            
-            , [t| Int8  |], [t| Int16  |], [t| Int32  |], [t| Int64  |]
-            , [t| Word8 |], [t| Word16 |], [t| Word32 |], [t| Word64 |]
-           
-            , [t| Addr# |]
-         --   , [t| ForeignObj# |] TODO: where is this even defined
-            , [t| ByteArray# |]
-            ]
-  qTycons = [ [t| Ptr |]
-            , [t| FunPtr |]
-            , [t| StablePtr |]
-            , [t| StablePtr# |]
-            , [t| MutableByteArray# |]
-            ]
+  qSimpleUnboxed = [ [t| Char#   |]
+                   , [t| Int#    |]
+                   , [t| Word#   |]
+                   , [t| Double# |]
+                   , [t| Float#  |]
+                   , [t| Addr# |]
+                --   , [t| ForeignObj# |] TODO: where is this even defined
+                   , [t| ByteArray# |]
+                   ]
+
+  qSimpleBoxed   = [ [t| Char   |] 
+                   , [t| Int    |]
+                   , [t| Word   |]
+                   , [t| Double |]
+                   , [t| Float  |]
+                   
+                   , [t| Bool |], [t| () |] -- TODO: let through `IO ()` but not `()`
+                   
+                   , [t| Int8  |], [t| Int16  |], [t| Int32  |], [t| Int64  |]
+                   , [t| Word8 |], [t| Word16 |], [t| Word32 |], [t| Word64 |]
+                  
+                   ]
+
+  qTyconsUnboxed = [ [t| Ptr |]
+                   , [t| FunPtr |]
+                   , [t| StablePtr |]
+                   ]
+
+  qTyconsBoxed   = [ [t| StablePtr# |]
+                   , [t| MutableByteArray# |]
+                   ]
 
 
 -- * Function pointers
