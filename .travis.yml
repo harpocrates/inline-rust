@@ -20,6 +20,8 @@ before_install:
 # Build the project and test suite 
 install:
   - echo $PATH
+  - which ld
+  - ld --version
   - cabal --version
   - ghc --version
   - rustc --version
