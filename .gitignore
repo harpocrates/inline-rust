@@ -18,3 +18,4 @@ stack.yaml
 **/*.dyn_o
 **/*.dyn_hi
 .DS_Store
+.ghc.environment*

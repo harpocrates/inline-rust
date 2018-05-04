@@ -98,6 +98,7 @@ import Foreign.Ptr                           ( freeHaskellFunPtr, Ptr )
 import Control.Monad                         ( void, when )
 import Data.List                             ( intercalate )
 import Data.Traversable                      ( for )
+import System.Random                         ( randomIO )
 
 -- $overview
 --
@@ -266,7 +267,8 @@ processQQ :: Safety -> Bool -> RustQuasiquoteParse -> Q Exp
 processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
 
   -- Make a name to thread through Haskell/Rust (see Trac #13054)
-  qqName' <- newName "quasiquote"
+  q <- runIO randomIO :: Q Int
+  qqName' <- newName $ "quasiquote" ++ show (abs q)
   qqName <- newName (show qqName')
   let qqStrName = show qqName
 
