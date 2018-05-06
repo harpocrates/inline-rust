@@ -2,14 +2,23 @@
 
 module Main where
 
-import Language.Rust.Inline  ( rust, rustIO, setContext, externCrate, basic, pointers, libc )
+import Language.Rust.Inline  ( rust, rustIO, extendContext, setCrateRootContext, basic, pointers, libc )
 import Foreign.Marshal       ( free, withArrayLen )
 import Foreign.C.String      ( newCString, peekCString )
 
-setContext (basic <> pointers <> libc)
+extendContext basic
+extendContext pointers
+extendContext libc
 
-externCrate "libc" "*"
-externCrate "rayon" "0.9"
+setCrateRootContext
+  [ ("libc", "*")
+  , ("rayon", "0.9")
+  ]
+
+[rust|
+extern crate libc;
+extern crate rayon;
+|]
 
 main :: IO ()
 main = do

@@ -1,4 +1,4 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE QuasiQuotes, TemplateHaskell #-}
 module SimpleTypes where
 
 import Language.Rust.Inline
@@ -6,6 +6,9 @@ import Test.Hspec
 
 import Data.Int
 import Data.Word
+
+extendContext basic
+setModuleContext 
 
 simpleTypes :: Spec
 simpleTypes = describe "Simple types" $ do

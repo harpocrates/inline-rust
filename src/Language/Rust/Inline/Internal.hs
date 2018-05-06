@@ -9,7 +9,7 @@ Portability : GHC
 -}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Language.Rust.Inline.Internal (
+module Language.Rust.Inline.Internal {- (
   emitCodeBlock,
   externCrate,
   setContext,
@@ -21,7 +21,7 @@ module Language.Rust.Inline.Internal (
   peekContext,
   extendContext,
   initModuleState,
-) where
+) -} where
 
 import Language.Rust.Inline.Context
 
@@ -31,113 +31,169 @@ import Language.Haskell.TH.Syntax
 import Data.Typeable                           ( Typeable )
 import Control.Monad                           ( void )
 import Data.Maybe                              ( fromMaybe )
+import Control.Arrow                           ( (&&&) )
+import Data.List                               ( unfoldr )
 
 import System.FilePath                         ( (</>), (<.>) )
-import System.Directory                        ( renameFile,
+import System.Directory                        ( renameFile, copyFile,
                                                  createDirectoryIfMissing )
 import System.Process                          ( spawnProcess, waitForProcess )
 import System.Exit                             ( ExitCode(..) )
 
--- | We maintain this state while processing the module. The idea is that each
--- module will correspond to one Rust file.
-data ModuleState = ModuleState
-                     { getContext :: Context       -- ^ how to translate types
-                     , codeBlocks :: [String]      -- ^ blocks of code emitted
-                     , crates :: [(String,String)] -- ^ crate name, version
-                     } deriving (Typeable)
+-- | Represents blocks of code to be emitted
+newtype CodeBlocks = CodeBlocks { reversedCodeBlocks :: [String] }
+  deriving ( Typeable )
 
 
--- | Get the 'ModuleState' of the current module, initializing it if it isn't
--- already initialized.
-initModuleState :: Maybe (Q Context) -- ^ how to initialize the context (default is
-                                     -- 'basic') if uninitialized.
-                -> Q ModuleState
-initModuleState contextMaybe = do
-  moduleStateMaybe <- getQ
-  case moduleStateMaybe of
-    -- Module state is already initialized
-    Just moduleState -> pure moduleState
-    
-    -- Module state needs to be initialized
-    Nothing -> do
+-- | Figure out what file we are currently in.
+currentFile :: Q ( String    -- ^ package
+                 , [String]  -- ^ dot-delimited segments of module name
+                 )
+currentFile = do
+  Module (PkgName pkg) (ModName modName) <- thisModule
+  pure (pkg, splitDots modName)
+  where splitDots = unfoldr splitDot
+        splitDot s | null s = Nothing
+                   | otherwise = let (x,r) = break (== '.') s in Just (x,drop 1 r)
 
-      -- add a hook to actually generate, compile, etc. the Rust file when we
-      -- are done processing the module.
-      addModFinalizer $ do
-        Just (ModuleState { codeBlocks = code
-                          , crates = deps
-                          , getContext = Context (_,_,impls) }) <- getQ
-       
-        let marshalIntoTrait = "trait MarshalInto<T> { fn marshal(self) -> T; }"
-        let code' = unlines (reverse code ++ [marshalIntoTrait] ++ impls)
 
-        -- If there are no dependencies, run `rustc`. Else, go through `cargo`
-        -- and store dependencies in `.inline-rust-quasi` folder.
-        if null deps
-          then addForeignRustFile [ "--crate-type=staticlib" ] code'
-          else do Module _ name <- thisModule
-                  let dir = ".inline-rust-quasi" </> modString name
-                  runIO $ createDirectoryIfMissing True dir
-                  addForeignRustFile' dir [] code' deps
+-- | Add a finalizer to run Cargo
+cargoFinalizer :: [String]           -- ^ Extra @rustc@ arguments
+                  -> [(String, String)] -- ^ Dependencies
+                  -> Q ()
+cargoFinalizer rustcArgs dependencies = do
+  (pkg, mods) <- currentFile
 
-      context <- fromMaybe basic contextMaybe 
-      
-      -- add a module state
-      let m = ModuleState { getContext = context 
-                          , codeBlocks = []
-                          , crates = []
-                          }
-      putQ m
-      pure m
+  let dir = ".inline-rust" </> pkg
+      thisFile = foldr1 (</>) mods <.> "rs"
+      crate = "quasiquote_" ++ pkg
+
+  -- Decide where to put the `Cargo.toml`
+  let rustFile  = dir </> thisFile
+      cargoToml = dir </> "Cargo" <.> "toml"
+      rustLib   = dir </> "target" </> "release" </> "lib" ++ crate <.> "a"
+
+  -- Make contents of a @Cargo.toml@ file
+  let cargoSrc = unlines [ "[package]"
+                         , "name = \"" ++ crate ++ "\""
+                         , "version = \"0.0.0\""
+
+                         , "[dependencies]"
+                         , unlines [ name ++ " = \"" ++ version ++ "\""
+                                   | (name, version) <- dependencies
+                                   ]
+
+                         , "[lib]"
+                         , "path = \"" ++ thisFile ++ "\""
+                         , "crate-type = [\"staticlib\"]"
+                         ]
+  runIO $ createDirectoryIfMissing True dir
+  runIO $ writeFile cargoToml cargoSrc
+
+  -- Run Cargo
+  let cargoArgs = [ "build"
+                  , "--release"
+                  , "--manifest-path=" ++ cargoToml
+                  ] ++ rustcArgs
+
+  ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
+  if (ec /= ExitSuccess)
+    then reportError rustcErrMsg
+    else do -- Move the library to a GHC temporary file
+            rustLib' <- addTempFile "a"
+            runIO $ copyFile rustLib rustLib'
+
+            -- Link in the static library
+            addForeignFilePath RawObject rustLib'
+
+
+-- | Add a finalizer to write out the Rust source file when we are done
+-- processing the module.
+fileFinalizer :: Q ()
+fileFinalizer = do
+  (pkg, mods) <- currentFile
+
+  let dir = ".inline-rust" </> pkg
+      thisFile = foldr1 (</>) mods <.> "rs"
+
+  -- Figure out what we are putting into this file 
+  Just (CodeBlocks code) <- getQ
+  Just (Context (_,_,impls)) <- getQ
+  let code' = unlines (reverse code ++ 
+                      [ "mod marshal {" ] ++
+                      [ "pub trait MarshalInto<T> { fn marshal(self) -> T; }" ] ++
+                      impls ++
+                      [ "}" ] ++
+                      [ "use marshal::MarshalInto;" ])
+
+  -- Write out the file
+  runIO $ createDirectoryIfMissing True dir
+  runIO $ writeFile (dir </> thisFile) code'
+
+-- | Initialize the 'CodeBlocks' of the current module. Crash if it is already
+-- intialized. This must be called exactly once.
+initCodeBlocks :: Maybe [(String,String)]  -- ^ dependencies, if crate root
+               -> Q () 
+initCodeBlocks dependenciesOpt = do
+  -- check if there is already something there
+  cb <- getQ
+  case cb of
+    Nothing -> pure ()
+    Just (CodeBlocks _) -> fail "initCodeBlocks: CodeBlocks already initialized"
+  
+  -- add hooks for writing out files (and possibly compiling the project)
+  case dependenciesOpt of
+    Nothing -> addModFinalizer fileFinalizer 
+    Just deps -> addModFinalizer (fileFinalizer *> cargoFinalizer [] deps)
+
+  -- add a module state
+  putQ (CodeBlocks [])
 
 
 -- | Emit a raw 'String' of Rust code into the current 'ModuleState'.
 emitCodeBlock :: String -> Q [Dec]
 emitCodeBlock code = do
-  moduleState <- initModuleState Nothing
-  putQ (moduleState { codeBlocks = code : codeBlocks moduleState })
+  Just (CodeBlocks cbs) <- getQ 
+  putQ (CodeBlocks (code : cbs))
   pure []
 
 
 -- | Sets the 'Context' for the current module. This function, if called, must
 -- be called before any of the other TH functions in this module.
 --
--- >  setContext (basic <> libc)
-setContext :: Q Context -> Q [Dec]
-setContext context = do
-  moduleState :: Maybe ModuleState <- getQ
-  case moduleState of
-    Nothing -> void (initModuleState (Just context))
-    Just _ -> reportError "The module has already been initialised (setContext)"
+-- >  setModuleContext (basic <> libc)
+setModuleContext :: Q [Dec]
+setModuleContext = do
+  initCodeBlocks Nothing
   pure []
+
+setCrateRootContext :: [(String, String)] -> Q [Dec]
+setCrateRootContext dependencies = do
+  initCodeBlocks (Just dependencies)
+  pure []
+  
+
+setContext :: Q Context -> Q ()
+setContext ctx = putQ =<< ctx
+
+getContext :: Q Context
+getContext = fromMaybe mempty <$> getQ
 
 extendContext :: Q Context -> Q [Dec]
 extendContext qExtension = do
   extension <- qExtension
-  moduleState <- initModuleState Nothing
-  putQ (moduleState { getContext = extension <> getContext moduleState })
+  ctx <- getContext
+  putQ (ctx <> extension) 
   pure []
-  
-
-peekContext :: Q Context
-peekContext = do
-  moduleState :: Maybe ModuleState <- getQ
-  case moduleState of
-    Nothing -> mempty 
-    Just ms -> pure (getContext ms)
-
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
 getRType :: RType -> Q (HType, Maybe RType)
 getRType rustType = do
-  context <- getContext <$> initModuleState Nothing
-  let (qht, qrtOpt) = getRTypeInContext rustType context
+  (qht, qrtOpt) <- getRTypeInContext rustType <$> getContext
   (,) <$> qht <*> sequence qrtOpt
 
 getHType :: HType -> Q RType
-getHType haskType = do
-  context <- getContext <$> initModuleState Nothing
-  getHTypeInContext haskType context
+getHType haskType = getHTypeInContext haskType =<< getContext
 
 -- | Error message to display when `cargo`/`rustc` fail to compile the module's
 -- Rust file. Unfortunately, [errors reported by TH are always followed by the
@@ -149,6 +205,7 @@ getHType haskType = do
 rustcErrMsg :: String
 rustcErrMsg = "Rust source file associated with this module failed to compile"
 
+{-
 -- | Add an extern crate dependency to this module. This is equivalent to
 -- adding `crate_name = "version"` to a Rust project's `Cargo.toml` file.
 --
@@ -158,11 +215,11 @@ externCrate :: String  -- ^ crate name
             -> Q [Dec]
 externCrate crateName crateVersion = do
   moduleState <- initModuleState Nothing
-  putQ (moduleState { crates = (crateName, crateVersion) : crates moduleState })
+--  putQ (moduleState { crates = (crateName, crateVersion) : crates moduleState })
 
   emitCodeBlock ("extern crate " ++ crateName ++ ";")
-
-
+-}
+{-
 -- | Compile Rust source code and link the raw object into the current binary.
 --
 -- TODO: think about the cross-compilation aspect of this (where is `runIO`?)
@@ -185,8 +242,8 @@ addForeignRustFile rustcArgs rustSrc = do
     then reportError rustcErrMsg
     else -- Link in the object
          addForeignFilePath RawObject fpOut
-
-
+-}
+{-
 -- | This is a more involved version of 'addForeignRustFile' which works for
 -- drawing in dependencies. It calls out to `cargo` instead of `rustc`.
 addForeignRustFile' :: FilePath           -- ^ temporary folder
@@ -236,4 +293,4 @@ addForeignRustFile' dir rustcArgs rustSrc dependencies = do
 
             -- Link in the object
             addForeignFilePath RawObject rustLib'
-
+-}

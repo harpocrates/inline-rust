@@ -8,7 +8,10 @@ import Language.Rust.Inline.TH
 import Foreign.Storable
 import Data.Int (Int32)
 
-setContext (basic <> prelude)
+extendContext basic
+extendContext prelude 
+
+setCrateRootContext []
 
 -- Some ADTs
 data Point a = Point a a deriving (Show)

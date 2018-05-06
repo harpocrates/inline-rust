@@ -13,7 +13,10 @@ import Data.Complex           ( Complex(..) )
 
 -- We add to our context the knowledge that a Rust pointer to a 'Complex' is
 -- the same as a Haskell 'Ptr' to a 'Complex Float'.
-setContext (basic <> singleton [ty| *mut Complex |] [t| Ptr (Complex Float) |])
+extendContext basic
+extendContext (singleton [ty| *mut Complex |] [t| Ptr (Complex Float) |])
+
+setCrateRootContext []
 
 -- Rust representation of Haskell's 'Complex'
 [rust|

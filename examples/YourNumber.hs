@@ -6,7 +6,10 @@ import Language.Rust.Inline
 import Foreign.Ptr
 import Data.Int (Int32, Int64)
 
-setContext (basic <> functions)
+extendContext basic
+extendContext functions 
+
+setCrateRootContext []
 
 -- Top-level functions - accessible from all quasiquotes
 [rust|

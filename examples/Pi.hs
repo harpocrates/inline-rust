@@ -5,10 +5,13 @@ module Main where
 import Language.Rust.Inline
 import Data.Int
 
-setContext (basic <> functions)
-externCrate "rayon" "0.9"
+extendContext basic
+extendContext functions
+
+setCrateRootContext [("rayon", "0.9")]
 
 [rust|
+extern crate rayon;
 use rayon::prelude::*;
 |]
 

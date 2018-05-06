@@ -91,7 +91,7 @@ rustTyCtx tyq = do
   (hADT, args) <- getTyCon ty
 
   -- Get the current context
-  ctx <- peekContext 
+  ctx <- getContext 
 
   -- Generate and emit the Rust types
   (rEnum, rReprCOpt, items, impls) <- mkReprC ctx ty'

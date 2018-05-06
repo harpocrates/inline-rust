@@ -7,6 +7,8 @@ import Language.Rust.Inline.TH
 
 import Foreign.Storable
 
+extendContext basic
+
 -- Some ADTs
 data Point a = Point a a deriving (Show)
 -- data Maybe ...  {- already defined in 'Data.Maybe'
@@ -19,6 +21,8 @@ mkStorable [t| forall a. Storable a => Storable (Point a) |]
 extendContext (rustTyCtx [t| forall a. Point a |])
 extendContext (rustTyCtx [t| forall a. Maybe a |])
 extendContext (rustTyCtx [t| forall e a. Either e a |])
+
+setCrateRootContext []
 
 -- Some Rust machinery
 [rust|
