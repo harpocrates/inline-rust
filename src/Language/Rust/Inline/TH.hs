@@ -9,14 +9,12 @@ import Language.Rust.Inline.Internal
 import Language.Rust.Inline.Pretty
 
 import Language.Haskell.TH ( Name, Q, TypeQ, Type(ForallT) )
-import Language.Haskell.TH.Syntax ( addTopDecls )
 import Language.Haskell.TH.Lib ( appT, conT )
 import Language.Rust.Data.Ident ( Ident ) 
 import Language.Rust.Syntax ( Ty(PathTy), Path(..), PathSegment(..), PathParameters(..) )
 
 import Data.Maybe  ( isJust, fromMaybe )
 import Data.Monoid ( First, Any(..) )
-import Data.List (intercalate)
 
 adtCtx :: Name         -- ^ name of the 'Storable' Haskell type 
        -> Ident        -- ^ name of the Rust type

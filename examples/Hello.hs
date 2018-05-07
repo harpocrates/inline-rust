@@ -7,7 +7,7 @@ import Data.Int
 
 extendContext basic
 
-setCrateRootContext []
+setCrateRoot []
 
 main = do
   putStrLn "Haskell: Hello. Enter a number:"

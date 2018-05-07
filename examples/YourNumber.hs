@@ -9,7 +9,7 @@ import Data.Int (Int32, Int64)
 extendContext basic
 extendContext functions 
 
-setCrateRootContext []
+setCrateRoot []
 
 -- Top-level functions - accessible from all quasiquotes
 [rust|

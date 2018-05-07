@@ -16,7 +16,7 @@ import Data.Complex           ( Complex(..) )
 extendContext basic
 extendContext (singleton [ty| *mut Complex |] [t| Ptr (Complex Float) |])
 
-setCrateRootContext []
+setCrateRoot []
 
 -- Rust representation of Haskell's 'Complex'
 [rust|

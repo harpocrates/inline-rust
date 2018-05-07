@@ -8,7 +8,7 @@ import Data.Int
 import Data.Word
 
 extendContext basic
-setModuleContext 
+setCrateModule 
 
 simpleTypes :: Spec
 simpleTypes = describe "Simple types" $ do

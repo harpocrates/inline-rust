@@ -22,7 +22,7 @@ extendContext (rustTyCtx [t| forall a. Point a |])
 extendContext (rustTyCtx [t| forall a. Maybe a |])
 extendContext (rustTyCtx [t| forall e a. Either e a |])
 
-setCrateRootContext []
+setCrateRoot []
 
 -- Some Rust machinery
 [rust|

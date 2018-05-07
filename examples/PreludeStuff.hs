@@ -11,7 +11,7 @@ import Data.Int (Int32)
 extendContext basic
 extendContext prelude 
 
-setCrateRootContext []
+setCrateRoot []
 
 -- Some ADTs
 data Point a = Point a a deriving (Show)

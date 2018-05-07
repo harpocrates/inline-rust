@@ -14,7 +14,7 @@ import Data.Int  ( Int64 )
 extendContext basic
 extendContext pointers
 
-setCrateRootContext
+setCrateRoot
   [ ("regex", "0.2") 
   ]
 

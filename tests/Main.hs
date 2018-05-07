@@ -18,7 +18,7 @@ import GhcUnboxedTypes
 import Test.Hspec
 
 extendContext basic
-setCrateRootContext []
+setCrateRoot []
 
 [rust|
 mod GhcUnboxedTypes;
@@ -29,8 +29,7 @@ pub use SimpleTypes::*;
 |]
 
 main :: IO ()
-main = do
-  hspec $
-    describe "Rust quasiquoter" $ do
-      simpleTypes
-      ghcUnboxedTypes
+main = hspec $
+  describe "Rust quasiquoter" $ do
+    simpleTypes
+    ghcUnboxedTypes

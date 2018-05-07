@@ -8,7 +8,7 @@ import Data.Int
 extendContext basic
 extendContext functions
 
-setCrateRootContext [("rayon", "0.9")]
+setCrateRoot [("rayon", "0.9")]
 
 [rust|
 extern crate rayon;

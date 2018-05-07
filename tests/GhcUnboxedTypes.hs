@@ -9,7 +9,7 @@ import GHC.Types
 
 extendContext ghcUnboxed
 extendContext basic
-setModuleContext
+setCrateModule
 
 ghcUnboxedTypes :: Spec
 ghcUnboxedTypes = describe "GHC unboxed types" $ do

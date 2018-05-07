@@ -2,7 +2,7 @@
 
 module Main where
 
-import Language.Rust.Inline  ( rust, rustIO, extendContext, setCrateRootContext, basic, pointers, libc )
+import Language.Rust.Inline  ( rust, rustIO, extendContext, setCrateRoot, basic, pointers, libc )
 import Foreign.Marshal       ( free, withArrayLen )
 import Foreign.C.String      ( newCString, peekCString )
 
@@ -10,7 +10,7 @@ extendContext basic
 extendContext pointers
 extendContext libc
 
-setCrateRootContext
+setCrateRoot
   [ ("libc", "*")
   , ("rayon", "0.9")
   ]

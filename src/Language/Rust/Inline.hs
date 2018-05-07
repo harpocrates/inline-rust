@@ -40,7 +40,8 @@ module Language.Rust.Inline (
   RType,
   HType,
   -- ** Using and defining contexts
-  setContext,
+  setCrateModule,
+  setCrateRoot,
   extendContext,
   singleton,
   mkContext,
@@ -71,8 +72,6 @@ module Language.Rust.Inline (
   mkStorable,
   mkReprC,
 
-  setModuleContext,
-  setCrateRootContext,
   -- * Top-level Rust items
  -- externCrate,
 ) where
@@ -140,12 +139,6 @@ import System.Random                         ( randomIO )
 -- pure expressions. Incorrectly annotating an impure expression as pure will
 -- /not/ cause a compile-time error but may break type safety and referential
 -- transparency.
-
-
-crateRoot :: [(String,String)] -- ^ Dependencies formatted as: crate name, version
-          -> Q ()
-crateRoot = error "unimplemented"
-
 
 -- $safe
 --

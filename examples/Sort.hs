@@ -2,14 +2,14 @@
 
 module Main where
 
-import Language.Rust.Inline ( rustIO, extendContext, setCrateRootContext, basic, pointers, withStorableArrayLen )
+import Language.Rust.Inline ( rustIO, extendContext, setCrateRoot, basic, pointers, withStorableArrayLen )
 import Data.Array.Storable  ( StorableArray, newListArray, getElems )
 import Data.Int             ( Int64 )
 
 extendContext basic
 extendContext pointers
 
-setCrateRootContext []
+setCrateRoot []
 
 main :: IO ()
 main = do

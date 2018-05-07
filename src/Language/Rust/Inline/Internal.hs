@@ -9,19 +9,16 @@ Portability : GHC
 -}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Language.Rust.Inline.Internal {- (
+module Language.Rust.Inline.Internal (
   emitCodeBlock,
-  externCrate,
-  setContext,
   getRType,
   getHType,
-  addForeignRustFile,
-  addForeignRustFile',
   getContext,
-  peekContext,
   extendContext,
-  initModuleState,
-) -} where
+  initCodeBlocks,
+  setCrateRoot,
+  setCrateModule,
+) where
 
 import Language.Rust.Inline.Context
 
@@ -29,13 +26,11 @@ import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 
 import Data.Typeable                           ( Typeable )
-import Control.Monad                           ( void )
 import Data.Maybe                              ( fromMaybe )
-import Control.Arrow                           ( (&&&) )
 import Data.List                               ( unfoldr )
 
 import System.FilePath                         ( (</>), (<.>) )
-import System.Directory                        ( renameFile, copyFile,
+import System.Directory                        ( copyFile,
                                                  createDirectoryIfMissing )
 import System.Process                          ( spawnProcess, waitForProcess )
 import System.Exit                             ( ExitCode(..) )
@@ -46,6 +41,8 @@ newtype CodeBlocks = CodeBlocks { reversedCodeBlocks :: [String] }
 
 
 -- | Figure out what file we are currently in.
+--
+-- TODO: package part of this is buggy
 currentFile :: Q ( String    -- ^ package
                  , [String]  -- ^ dot-delimited segments of module name
                  )
@@ -57,7 +54,9 @@ currentFile = do
                    | otherwise = let (x,r) = break (== '.') s in Just (x,drop 1 r)
 
 
--- | Add a finalizer to run Cargo
+-- * Finalizers
+
+-- | A finalizer to run Cargo and link in the static library.
 cargoFinalizer :: [String]           -- ^ Extra @rustc@ arguments
                   -> [(String, String)] -- ^ Dependencies
                   -> Q ()
@@ -69,8 +68,7 @@ cargoFinalizer rustcArgs dependencies = do
       crate = "quasiquote_" ++ pkg
 
   -- Decide where to put the `Cargo.toml`
-  let rustFile  = dir </> thisFile
-      cargoToml = dir </> "Cargo" <.> "toml"
+  let cargoToml = dir </> "Cargo" <.> "toml"
       rustLib   = dir </> "target" </> "release" </> "lib" ++ crate <.> "a"
 
   -- Make contents of a @Cargo.toml@ file
@@ -106,9 +104,18 @@ cargoFinalizer rustcArgs dependencies = do
             -- Link in the static library
             addForeignFilePath RawObject rustLib'
 
+-- | Error message to display when @cargo@/@rustc@ fail to compile the module's
+-- Rust file. Unfortunately, [errors reported by TH are always followed by the
+-- piece of error code][0]. In this case, that ends up being the top of the file.
+--
+-- TODO: is there a way to avoid this?
+--
+-- [0]: https://stackoverflow.com/questions/47598270/whole-file-template-haskell-error
+rustcErrMsg :: String
+rustcErrMsg = "Rust source file associated with this module failed to compile"
 
--- | Add a finalizer to write out the Rust source file when we are done
--- processing the module.
+-- | A finalizer to write out a Rust source file when we are done processing
+-- this module.
 fileFinalizer :: Q ()
 fileFinalizer = do
   (pkg, mods) <- currentFile
@@ -117,9 +124,9 @@ fileFinalizer = do
       thisFile = foldr1 (</>) mods <.> "rs"
 
   -- Figure out what we are putting into this file 
-  Just (CodeBlocks code) <- getQ
+  Just codeBlocks <- fmap (reverse . reversedCodeBlocks) <$> getQ
   Just (Context (_,_,impls)) <- getQ
-  let code' = unlines (reverse code ++ 
+  let code = unlines (codeBlocks ++ 
                       [ "mod marshal {" ] ++
                       [ "use super::*;" ] ++
                       [ "pub trait MarshalInto<T> { fn marshal(self) -> T; }" ] ++
@@ -129,7 +136,10 @@ fileFinalizer = do
 
   -- Write out the file
   runIO $ createDirectoryIfMissing True dir
-  runIO $ writeFile (dir </> thisFile) code'
+  runIO $ writeFile (dir </> thisFile) code
+
+
+-- * Module state
 
 -- | Initialize the 'CodeBlocks' of the current module. Crash if it is already
 -- intialized. This must be called exactly once.
@@ -158,28 +168,32 @@ emitCodeBlock code = do
   putQ (CodeBlocks (code : cbs))
   pure []
 
-
--- | Sets the 'Context' for the current module. This function, if called, must
--- be called before any of the other TH functions in this module.
+-- | Freeze the context and begin the part of the module which can contain Rust
+-- quasiquotes. If this module is also the crate root, use 'setCrateRoot'
+-- instead. 
 --
--- >  setModuleContext (basic <> libc)
-setModuleContext :: Q [Dec]
-setModuleContext = do
+-- This function must be called before any other Rust quasiquote in the file.
+setCrateModule :: Q [Dec]
+setCrateModule = do
   initCodeBlocks Nothing
   pure []
 
-setCrateRootContext :: [(String, String)] -> Q [Dec]
-setCrateRootContext dependencies = do
+-- | Freeze the context and begin the part of the module which can contain Rust
+-- quasiquotes. This function must be called in exactly one file in the
+-- package; it is what will trigger compilation of all Rust quasiquotes in the
+-- package and link the result into the final output.
+--
+-- This function must be called before any other Rust quasiquote in the file.
+setCrateRoot :: [(String, String)] -> Q [Dec]
+setCrateRoot dependencies = do
   initCodeBlocks (Just dependencies)
   pure []
   
-
-setContext :: Q Context -> Q ()
-setContext ctx = putQ =<< ctx
-
+-- | Get the existing context
 getContext :: Q Context
 getContext = fromMaybe mempty <$> getQ
 
+-- | Append to the existing context 
 extendContext :: Q Context -> Q [Dec]
 extendContext qExtension = do
   extension <- qExtension
@@ -193,105 +207,7 @@ getRType rustType = do
   (qht, qrtOpt) <- getRTypeInContext rustType <$> getContext
   (,) <$> qht <*> sequence qrtOpt
 
+-- | Search in a 'Context' for the Rust type corresponding to a Haskell type.
 getHType :: HType -> Q RType
 getHType haskType = getHTypeInContext haskType =<< getContext
 
--- | Error message to display when `cargo`/`rustc` fail to compile the module's
--- Rust file. Unfortunately, [errors reported by TH are always followed by the
--- piece of error code][0]. In this case, that ends up being the top of the file.
---
--- TODO: is there a way to avoid this?
---
--- [0]: https://stackoverflow.com/questions/47598270/whole-file-template-haskell-error
-rustcErrMsg :: String
-rustcErrMsg = "Rust source file associated with this module failed to compile"
-
-{-
--- | Add an extern crate dependency to this module. This is equivalent to
--- adding `crate_name = "version"` to a Rust project's `Cargo.toml` file.
---
--- >  externCrate "rayon" "0.9"
-externCrate :: String  -- ^ crate name
-            -> String  -- ^ crate version
-            -> Q [Dec]
-externCrate crateName crateVersion = do
-  moduleState <- initModuleState Nothing
---  putQ (moduleState { crates = (crateName, crateVersion) : crates moduleState })
-
-  emitCodeBlock ("extern crate " ++ crateName ++ ";")
--}
-{-
--- | Compile Rust source code and link the raw object into the current binary.
---
--- TODO: think about the cross-compilation aspect of this (where is `runIO`?)
-addForeignRustFile :: [String] -- ^ options to pass to `rustc`
-                   -> String   -- ^ contents of a complete Rust source file
-                   -> Q ()
-addForeignRustFile rustcArgs rustSrc = do
-
-  -- Make input/output files
-  fpIn <- addTempFile "rs"
-  fpOut <- addTempFile "a"
-  
-  -- Write in the Rust source
-  runIO $ writeFile fpIn rustSrc
-  
-  -- Call `rustc`
-  let rustcAllArgs = rustcArgs ++ [ fpIn, "-o", fpOut ]
-  ec <- runIO $ spawnProcess "rustc" rustcAllArgs >>= waitForProcess
-  if ec /= ExitSuccess
-    then reportError rustcErrMsg
-    else -- Link in the object
-         addForeignFilePath RawObject fpOut
--}
-{-
--- | This is a more involved version of 'addForeignRustFile' which works for
--- drawing in dependencies. It calls out to `cargo` instead of `rustc`.
-addForeignRustFile' :: FilePath           -- ^ temporary folder
-                    -> [String]           -- ^ option to pass to `rustc`
-                    -> String             -- ^ contents of complete Rust file
-                    -> [(String, String)] -- ^ crate dependencies
-                    -> Q ()
-addForeignRustFile' dir rustcArgs rustSrc dependencies = do
-
-  -- Find a place to put the Rust source and `Cargo.toml`
-  let rustFile  = dir </> "quasiquote" <.> "rs"
-  let cargoToml = dir </> "Cargo" <.> "toml"
-  let rustLib   = dir </> "target" </> "release" </> "libquasiquote" <.> "a"
-
-  -- Write in Rust source
-  runIO $ writeFile rustFile rustSrc
-
-  -- Make a `Cargo.toml` file
-  let cargoSrc = unlines [ "[package]"
-                         , "name = \"quasiquote\""
-                         , "version = \"0.0.0\""
-
-                         , "[dependencies]"
-                         , unlines [ name ++ " = \"" ++ version ++ "\""
-                                   | (name, version) <- dependencies
-                                   ]
-
-                         , "[lib]"
-                         , "path = \"quasiquote.rs\""
-                         , "crate-type = [\"staticlib\"]"
-                         ]
-  runIO $ writeFile cargoToml cargoSrc
-
-  -- Call `cargo`
-  let cargoArgs = [ "rustc"
-                  , "--release"
-                  , "--manifest-path=" ++ cargoToml
-                  , "--"
-                  ] ++ rustcArgs
-
-  ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
-  if (ec /= ExitSuccess)
-    then reportError rustcErrMsg
-    else do -- Move the library to a GHC temporary file
-            rustLib' <- addTempFile "a"
-            runIO $ renameFile rustLib rustLib'
-
-            -- Link in the object
-            addForeignFilePath RawObject rustLib'
--}
