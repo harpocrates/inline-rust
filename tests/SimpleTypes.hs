@@ -16,13 +16,9 @@ simpleTypes = describe "Simple types" $ do
     let x = 'a'
     [rust| char { $(x: char).to_uppercase().next().unwrap() } |] `shouldBe` 'A'
   
-{-  it "Can marshal an Word argument/return" $ do
-    let x = 3 :: Word
-    [rust| usize { !$(x: usize) + 4 } |] `shouldBe` (x + 4)
-  
   it "Can marshal a Int argument/return" $ do
     let x = -3 :: Int
-    [rust| isize { !$(x: isize) + 4 } |] `shouldBe` (x + 4) -}
+    [rust| isize { $(x: isize) + 4 } |] `shouldBe` (x + 4)
   
   it "Can marshal an Int8 argument/return" $ do
     let x = -3 :: Int8
@@ -39,6 +35,10 @@ simpleTypes = describe "Simple types" $ do
   it "Can marshal an Int64 argument/return" $ do
     let x = -3 :: Int64
     [rust| i64 { $(x: i64) + 10000000004 } |] `shouldBe` (x + 10000000004)
+  
+  it "Can marshal an Word argument/return" $ do
+    let x = 3 :: Word
+    [rust| usize { $(x: usize) + 4 } |] `shouldBe` (x + 4)
   
   it "Can marshal a Word8 argument/return" $ do
     let x = 3 :: Word8

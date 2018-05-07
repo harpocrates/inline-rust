@@ -121,10 +121,11 @@ fileFinalizer = do
   Just (Context (_,_,impls)) <- getQ
   let code' = unlines (reverse code ++ 
                       [ "mod marshal {" ] ++
+                      [ "use super::*;" ] ++
                       [ "pub trait MarshalInto<T> { fn marshal(self) -> T; }" ] ++
                       impls ++
                       [ "}" ] ++
-                      [ "use marshal::MarshalInto;" ])
+                      [ "use marshal::*;" ])
 
   -- Write out the file
   runIO $ createDirectoryIfMissing True dir

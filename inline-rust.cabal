@@ -60,7 +60,7 @@ library
 test-suite spec
   hs-source-dirs:      tests
   ghc-options:         -threaded
-  extra-libraries:     System resolv c m
+--  extra-libraries:     System resolv c m
   main-is:             Main.hs
   
   type:                exitcode-stdio-1.0

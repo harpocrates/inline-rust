@@ -95,12 +95,9 @@ rustTyCtx tyq = do
 
   -- Generate and emit the Rust types
   (rEnum, rReprCOpt, items, impls) <- mkReprC ctx ty'
-  let itemsStr = intercalate "\n\n" (map renderItem items)
-  decs <- emitCodeBlock itemsStr
-  addTopDecls decs
 
   -- Produce the context
-  adtCtx hADT rEnum rReprCOpt (length args) (map renderItem impls)
+  adtCtx hADT rEnum rReprCOpt (length args) (map renderItem (impls ++ items))
   
 
 
