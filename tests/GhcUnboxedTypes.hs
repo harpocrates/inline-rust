@@ -7,7 +7,9 @@ import Test.Hspec
 import GHC.Prim
 import GHC.Types
 
-setContext (ghcUnboxed <> basic)
+extendContext ghcUnboxed
+extendContext basic
+setCrateModule
 
 ghcUnboxedTypes :: Spec
 ghcUnboxedTypes = describe "GHC unboxed types" $ do

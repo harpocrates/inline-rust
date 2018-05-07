@@ -5,6 +5,10 @@ module Main where
 import Language.Rust.Inline
 import Data.Int
 
+extendContext basic
+
+setCrateRoot []
+
 main = do
   putStrLn "Haskell: Hello. Enter a number:"
   x <- readLn

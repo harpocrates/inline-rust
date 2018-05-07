@@ -1,27 +1,37 @@
 # Sudo used for custom apt setup
 sudo: true
 
-# Manually install ghc and cabal
+matrix:
+  include:
+    - os: osx
+      env:
+        - CABAL_TAR='https://www.haskell.org/cabal/release/cabal-install-2.2.0.0/cabal-install-2.2.0.0-x86_64-apple-darwin-sierra.tar.gz'
+        - GHC_TAR='https://ghc-artifacts.s3.amazonaws.com/nightly/validate-x86_64-darwin/latest/bindist.tar.xz'
+    - os: linux 
+      env:
+        - CABAL_TAR='https://www.haskell.org/cabal/release/cabal-install-2.2.0.0/cabal-install-2.2.0.0-x86_64-unknown-linux.tar.gz'
+        - GHC_TAR='https://ghc-artifacts.s3.amazonaws.com/nightly/validate-x86_64-linux/latest/bindist.tar.xz'
+
+# Manually install cabal-install, GHC, and rustup
 before_install:
-  - sudo rm /bin/sh
-  - sudo ln -s /bin/bash /bin/sh
-  - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
-  - travis_retry sudo apt-get update
-  - travis_retry sudo apt-get install cabal-install-head
-  - travis_retry curl https://ghc-artifacts.s3.amazonaws.com/nightly/validate-x86_64-linux/latest/bindist.tar.xz --output latest.tar.xz
-  - tar xpvf latest.tar.xz
+  - travis_retry curl $CABAL_TAR --output cabal.tar.xz
+  - tar xpvf cabal.tar.xz
+  - sudo cp cabal /usr/local/bin
+
+  - travis_retry curl $GHC_TAR --output ghc.tar.xz
+  - tar xpvf ghc.tar.xz
   - cd ghc-*
-  - ./configure 
+  - ./configure --disable-ld-override
   - sudo make V=1 install
   - cd ..
+
   - curl https://sh.rustup.rs -sSf | sudo sh -s -- -y
-  - export PATH=/usr/local/bin:/opt/cabal/head/bin:~/.cargo/bin:$PATH
+  - export PATH=/usr/local/bin:~/.cargo/bin:$PATH
 
 # Build the project and test suite 
 install:
   - echo $PATH
   - which ld
-  - ld --version
   - cabal --version
   - ghc --version
   - rustc --version

@@ -7,15 +7,19 @@ import Foreign.Marshal.Unsafe
 import Foreign.Ptr
 import Foreign.Marshal.Utils
 
-
 import Data.ByteString
 import Data.Word ( Word64 )
 import Data.Int  ( Int64 )
 
-setContext (basic <> pointers)
-externCrate "regex" "0.2"
+extendContext basic
+extendContext pointers
+
+setCrateRoot
+  [ ("regex", "0.2") 
+  ]
 
 [rust|
+extern crate regex;
 use regex::bytes::Regex;
 use std::slice::from_raw_parts_mut;
 |]

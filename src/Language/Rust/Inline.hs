@@ -40,7 +40,8 @@ module Language.Rust.Inline (
   RType,
   HType,
   -- ** Using and defining contexts
-  setContext,
+  setCrateModule,
+  setCrateRoot,
   extendContext,
   singleton,
   mkContext,
@@ -72,7 +73,7 @@ module Language.Rust.Inline (
   mkReprC,
 
   -- * Top-level Rust items
-  externCrate,
+ -- externCrate,
 ) where
 
 import Language.Rust.Inline.Context 
@@ -138,7 +139,6 @@ import System.Random                         ( randomIO )
 -- pure expressions. Incorrectly annotating an impure expression as pure will
 -- /not/ cause a compile-time error but may break type safety and referential
 -- transparency.
-
 
 -- $safe
 --

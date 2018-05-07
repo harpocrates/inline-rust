@@ -10,7 +10,7 @@ dist-newstyle/
 stack.yaml
 
 # inline-rust related
-.inline-rust-quasi
+.inline-rust
 
 # Other
 **/*.o

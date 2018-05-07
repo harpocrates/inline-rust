@@ -9,14 +9,12 @@ import Language.Rust.Inline.Internal
 import Language.Rust.Inline.Pretty
 
 import Language.Haskell.TH ( Name, Q, TypeQ, Type(ForallT) )
-import Language.Haskell.TH.Syntax ( addTopDecls )
 import Language.Haskell.TH.Lib ( appT, conT )
 import Language.Rust.Data.Ident ( Ident ) 
 import Language.Rust.Syntax ( Ty(PathTy), Path(..), PathSegment(..), PathParameters(..) )
 
 import Data.Maybe  ( isJust, fromMaybe )
 import Data.Monoid ( First, Any(..) )
-import Data.List (intercalate)
 
 adtCtx :: Name         -- ^ name of the 'Storable' Haskell type 
        -> Ident        -- ^ name of the Rust type
@@ -91,16 +89,13 @@ rustTyCtx tyq = do
   (hADT, args) <- getTyCon ty
 
   -- Get the current context
-  ctx <- peekContext 
+  ctx <- getContext 
 
   -- Generate and emit the Rust types
   (rEnum, rReprCOpt, items, impls) <- mkReprC ctx ty'
-  let itemsStr = intercalate "\n\n" (map renderItem items)
-  decs <- emitCodeBlock itemsStr
-  addTopDecls decs
 
   -- Produce the context
-  adtCtx hADT rEnum rReprCOpt (length args) (map renderItem impls)
+  adtCtx hADT rEnum rReprCOpt (length args) (map renderItem (impls ++ items))
   
 
 

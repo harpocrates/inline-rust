@@ -359,7 +359,7 @@ mkEnum ctx dict n cons = do
   (varNs, vars) <- fmap unzip $
     for cons $ \(nCon, flds) -> do
       let varN = mkIdent (nameBase nCon)
-      varData <- mkVariant ctx flds
+      varData <- mkVariant ctx flds False
       pure (varN, Variant varN [] varData Nothing ())
 
   let enum = Enum [deriveCopyClone] PublicV itemN vars (mkGenerics ps) ()
@@ -456,7 +456,7 @@ mkStruct :: Context          -- ^ current context (in order to lookup what Rust 
               , Item ()      --   Struct definition
               )
 mkStruct ctx dict copy n tys = do
-  var <- mkVariant ctx tys
+  var <- mkVariant ctx tys True
 
   let itemN = mkIdent (nameBase n)
       haskTysUsed = concatMap getAllVars tys
@@ -472,10 +472,11 @@ mkStruct ctx dict copy n tys = do
   pure (outTy, (itemN, length tys), struct)
 
 -- | Construct the variant data for struct fields.
-mkVariant :: Context -> [Type] -> Q (VariantData ())
-mkVariant _ [] = pure (UnitD ())
-mkVariant ctx tys = do
+mkVariant :: Context -> [Type] -> Bool -> Q (VariantData ())
+mkVariant _ [] _ = pure (UnitD ())
+mkVariant ctx tys pub = do
   rustTys <- traverse (`getHTypeInContext` ctx) tys
-  let structFlds = [ StructField Nothing InheritedV t [] () | t <- rustTys ]
+  let vis = if pub then PublicV else InheritedV 
+      structFlds = [ StructField Nothing vis t [] () | t <- rustTys ]
   pure (TupleD structFlds ())
 
