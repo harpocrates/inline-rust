@@ -2,8 +2,6 @@
 
 #ifdef darwin_HOST_OS
 {-# OPTIONS_GHC -optl-Wl,-all_load #-}
-#elif mingw32_HOST_OS
-#error TODO
 #else
 {-# OPTIONS_GHC -optl-Wl,--whole-archive #-}
 #endif

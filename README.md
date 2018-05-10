@@ -1,6 +1,7 @@
 # inline-rust
 
-[![Build Status](https://travis-ci.org/harpocrates/inline-rust.svg?branch=master)](https://travis-ci.org/harpocrates/inline-rust)
+[![Build Status][5]][6]
+[![Windows build status][7]][8]
 
 This package allows you to write Rust inline in your Haskell source using
 quasiquotes. Here is a short example. For more examples, check out the
@@ -68,3 +69,7 @@ Please report bugs to [the issue tracker][4]
 [2]: https://github.com/harpocrates/inline-rust/tree/master/examples
 [3]: https://github.com/harpocrates/language-rust
 [4]: https://github.com/harpocrates/inline-rust/issues
+[5]: https://travis-ci.org/harpocrates/inline-rust.svg?branch=master 
+[6]: https://travis-ci.org/harpocrates/inline-rust
+[7]: https://ci.appveyor.com/api/projects/status/xiwf8743n2f7n400?svg=true
+[8]: https://ci.appveyor.com/project/harpocrates/inline-rust

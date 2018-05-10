@@ -19,8 +19,9 @@ before_install:
   - sudo cp cabal /usr/local/bin
 
   - travis_retry curl $GHC_TAR --output ghc.tar.xz
-  - tar xpvf ghc.tar.xz
-  - cd ghc-*
+  - mkdir ghc
+  - tar xpf ghc.tar.xz --strip-components 1 -C ghc
+  - cd ghc
   - ./configure --disable-ld-override
   - sudo make V=1 install
   - cd ..

@@ -25,15 +25,17 @@ import Language.Rust.Inline.Context
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 
-import Data.Typeable                           ( Typeable )
-import Data.Maybe                              ( fromMaybe )
-import Data.List                               ( unfoldr )
+import Control.Monad               ( when ) 
+import Data.Typeable               ( Typeable )
+import Data.Maybe                  ( fromMaybe )
+import Data.List                   ( unfoldr )
 
-import System.FilePath                         ( (</>), (<.>) )
-import System.Directory                        ( copyFile,
-                                                 createDirectoryIfMissing )
-import System.Process                          ( spawnProcess, waitForProcess )
-import System.Exit                             ( ExitCode(..) )
+import System.FilePath             ( (</>), (<.>), takeExtension )
+import System.Directory            ( copyFile, createDirectoryIfMissing )
+import System.Process              ( spawnProcess, readProcess, waitForProcess )
+import System.Exit                 ( ExitCode(..) )
+
+import Text.JSON
 
 -- | Represents blocks of code to be emitted
 newtype CodeBlocks = CodeBlocks { reversedCodeBlocks :: [String] }
@@ -67,12 +69,9 @@ cargoFinalizer rustcArgs dependencies = do
       thisFile = foldr1 (</>) mods <.> "rs"
       crate = "quasiquote_" ++ pkg
 
-  -- Decide where to put the `Cargo.toml`
-  let cargoToml = dir </> "Cargo" <.> "toml"
-      rustLib   = dir </> "target" </> "release" </> "lib" ++ crate <.> "a"
-
   -- Make contents of a @Cargo.toml@ file
-  let cargoSrc = unlines [ "[package]"
+  let cargoToml = dir </> "Cargo" <.> "toml"
+      cargoSrc = unlines [ "[package]"
                          , "name = \"" ++ crate ++ "\""
                          , "version = \"0.0.0\""
 
@@ -88,21 +87,33 @@ cargoFinalizer rustcArgs dependencies = do
   runIO $ createDirectoryIfMissing True dir
   runIO $ writeFile cargoToml cargoSrc
 
-  -- Run Cargo
+  -- Run Cargo to compile the project
   let cargoArgs = [ "build"
                   , "--release"
                   , "--manifest-path=" ++ cargoToml
-                  ] ++ rustcArgs
+                  ] ++ rustcArgs 
+      msgFormat = [ "--message-format=json" ]
 
   ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
-  if (ec /= ExitSuccess)
-    then reportError rustcErrMsg
-    else do -- Move the library to a GHC temporary file
-            rustLib' <- addTempFile "a"
-            runIO $ copyFile rustLib rustLib'
+  when (ec /= ExitSuccess)
+    (reportError rustcErrMsg)
+ 
+  -- Run Cargo again to get the static library path
+  jOut <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
+  rustLibFp <-
+    case decode jOut of
+      Error msg -> fail ("cargoFinalizer: " ++ msg)
+      Ok jObj -> case lookup "filenames" (fromJSObject jObj) of
+                   Just (JSArray [ JSString jStr ]) -> pure (fromJSString jStr)
+                   _ -> fail ("cargoFinalizer: did not find one static library")
 
-            -- Link in the static library
-            addForeignFilePath RawObject rustLib'
+  -- Move the library to a GHC temporary file
+  let ext = takeExtension rustLibFp
+  rustLibFp' <- addTempFile ext
+  runIO $ copyFile rustLibFp rustLibFp'
+
+  -- Link in the static library
+  addForeignFilePath RawObject rustLibFp'
 
 -- | Error message to display when @cargo@/@rustc@ fail to compile the module's
 -- Rust file. Unfortunately, [errors reported by TH are always followed by the
