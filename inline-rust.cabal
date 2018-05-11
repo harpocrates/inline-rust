@@ -63,8 +63,6 @@ test-suite spec
   ghc-options:         -threaded
   
   if os(windows)
- --   extra-libraries:    
-  --    advapi32.lib ws2_32.lib userenv.lib shell32.lib msvcrt.lib
     extra-libraries:
       advapi32 ws2_32 userenv shell32 gcc_eh pthread
 
