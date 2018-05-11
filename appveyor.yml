@@ -19,7 +19,7 @@ install:
   - set PATH=%PATH%;c:\inline-rust\ghc\bin
 
   - appveyor-retry curl %RUSTUP_EXE% --output rustup-init.exe
-  - rustup-init.exe -y --default-host=x86_64-pc-windows-msvc
+  - rustup-init.exe -y --default-host=x86_64-pc-windows-gnu
   - set PATH=%PATH%;c:\Users\appveyor\.cargo\bin
 
 # Build the project and test suite
