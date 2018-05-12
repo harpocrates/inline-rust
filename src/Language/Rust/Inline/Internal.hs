@@ -137,13 +137,13 @@ fileFinalizer = do
   -- Figure out what we are putting into this file 
   Just codeBlocks <- fmap (reverse . reversedCodeBlocks) <$> getQ
   Just (Context (_,_,impls)) <- getQ
-  let code = unlines (codeBlocks ++ 
-                      [ "mod marshal {" ] ++
+  let code = unlines (codeBlocks ++
+                      [ "pub mod marshal {" ] ++
                       [ "#[allow(unused_imports)] use super::*;" ] ++
                       [ "pub trait MarshalInto<T> { fn marshal(self) -> T; }" ] ++
                       impls ++
                       [ "}" ] ++
-                      [ "#[allow(unused_imports)]  use marshal::*;" ])
+                      [ "#[allow(unused_imports)]  use self::marshal::*;" ])
 
   -- Write out the file
   runIO $ createDirectoryIfMissing True dir

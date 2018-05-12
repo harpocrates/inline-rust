@@ -12,6 +12,7 @@ import Language.Rust.Inline
 
 import SimpleTypes
 import GhcUnboxedTypes
+import PointerTypes
 
 import Test.Hspec
 
@@ -21,9 +22,11 @@ setCrateRoot []
 [rust|
 mod GhcUnboxedTypes;
 mod SimpleTypes;
+mod PointerTypes;
 
 pub use GhcUnboxedTypes::*;
 pub use SimpleTypes::*;
+pub use PointerTypes::*;
 |]
 
 main :: IO ()
@@ -31,3 +34,4 @@ main = hspec $
   describe "Rust quasiquoter" $ do
     simpleTypes
     ghcUnboxedTypes
+    pointerTypes
