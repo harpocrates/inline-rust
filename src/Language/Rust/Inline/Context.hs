@@ -29,6 +29,7 @@ import Data.Monoid                 ( First(..) )
 import Data.Typeable               ( Typeable )
 import Control.Monad               ( void, liftM2 )
 import Data.Traversable            ( for )
+import Data.List                   ( intercalate )
 
 import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
@@ -334,11 +335,19 @@ functions = do
   getApps (AppT e1 e2) = e1 : getApps e2
   getApps e = [e]
 
-
-  -- TODO more arguments return types
+  -- TODO: this only goes up to 16
   impl :: String
-  impl = unlines [ "impl<T,U> MarshalInto<extern \"C\" fn(T) -> U> for (extern \"C\" fn(T) -> U) {"
-                 , "  fn marshal(self) -> (extern \"C\" fn(T) -> U) { self }"
-                 , "}"
-                 ]
+  impl = unlines (map implN [1..16])
+
+    where
+    vars = [ l : i | i <- "" : map show [(1 :: Int)..], l <- ['T'..'Z'] ]
+
+    implN :: Int -> String
+    implN n = let vs = intercalate "," (take n vars)
+                  f = "extern \"C\" fn (" ++ vs ++ ") -> R"
+              in unlines [ "impl<" ++ vs ++ ",R> MarshalInto<" ++ f ++ "> for (" ++ f ++ ") {"
+                         , "  fn marshal(self) -> (" ++ f ++ ") { self }"
+                         , "}"
+                         ]
+
 

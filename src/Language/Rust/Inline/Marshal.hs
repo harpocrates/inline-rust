@@ -135,6 +135,23 @@ withFunPtr hTy = do
                     }
     |]
 
+-- | TH utility for converting function pointers back into Haskell functions. 
+-- Remember to use the 'functions' context. Note that the function is only
+-- valid as long as the function pointer.
+--
+-- @
+--    unFunPtr [t| Int -> Int |] fooPtr
+-- @
+unFunPtr :: Q HType -> Q Exp
+unFunPtr hTy = do
+  -- Generate FFI
+  unFun <- newName . show =<< newName "dyn" -- Make a name to thread through Haskell/Rust (see Trac #13054)
+  dec <- forImpD CCall Safe "dynamic" unFun [t| FunPtr $hTy -> $hTy |]
+  addTopDecls [dec]
+  
+  -- Call FFI
+  pure (VarE unFun)
+
 
 -- * Bytestrings
 

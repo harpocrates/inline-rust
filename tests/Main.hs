@@ -13,6 +13,7 @@ import Language.Rust.Inline
 import SimpleTypes
 import GhcUnboxedTypes
 import PointerTypes
+import FunctionPointerTypes
 
 import Test.Hspec
 
@@ -23,10 +24,12 @@ setCrateRoot []
 mod GhcUnboxedTypes;
 mod SimpleTypes;
 mod PointerTypes;
+mod FunctionPointerTypes;
 
 pub use GhcUnboxedTypes::*;
 pub use SimpleTypes::*;
 pub use PointerTypes::*;
+pub use FunctionPointerTypes::*;
 |]
 
 main :: IO ()
@@ -35,3 +38,4 @@ main = hspec $
     simpleTypes
     ghcUnboxedTypes
     pointerTypes
+    funcPointerTypes

@@ -15,13 +15,9 @@ extendContext pointers
 extendContext basic
 setCrateModule
 
-[rust|
-static pi: f32 = 3.14159;
-|]
-
 pointerTypes :: Spec
 pointerTypes = describe "Pointer types" $ do
-  it "Can marshal an immutable Ptr Int argument/return" $ do
+  it "Can marshal an immutable `Ptr Int` argument/return" $ do
     arr <- newArray ([5,-7,3,9] :: [Int]) 
    
     -- The pointer at offset 2 is the same
@@ -34,7 +30,7 @@ pointerTypes = describe "Pointer types" $ do
     x' <- arr `peekElemOff` 2
     x `shouldBe` x'
 
-  it "Can marshal a mutable Ptr Word argument" $ do
+  it "Can marshal a mutable `Ptr Word` argument" $ do
     let x = 8 :: Word
     ptr <- new x
     [rustIO| () { unsafe { *$(ptr: *mut usize) += 1; } } |]

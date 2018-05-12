@@ -63,6 +63,7 @@ module Language.Rust.Inline (
   new,
   withFunPtr,
   newFunPtr,
+  unFunPtr,
   freeHaskellFunPtr,
   withArrayLen,
   withStorableArrayLen,
