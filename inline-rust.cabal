@@ -78,6 +78,7 @@ test-suite spec
                      , GhcUnboxedTypes
                      , PointerTypes
                      , FunctionPointerTypes
+                     , PreludeTypes
   build-depends:       base
                      , inline-rust
                      , hspec

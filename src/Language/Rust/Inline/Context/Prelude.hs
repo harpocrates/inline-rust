@@ -236,7 +236,7 @@ tupleItems :: Int -> [String]
 tupleItems n = map unlines 
     -- Struct declaration for intermediate type
   [ [ "#[repr(C)]"
-    , "#[derive(Debug,Clone)]"
+    , "#[derive(Debug,Clone,Copy)]"
     , "pub struct " ++ reprTupleTy ts ++ tuple ts ++ ";"
     ]
     -- impl MarshalInto<TupleN<...>> for (...)

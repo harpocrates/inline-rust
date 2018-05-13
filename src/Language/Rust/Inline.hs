@@ -354,7 +354,7 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
                        )
          | otherwise = ( ["ret_" ++ qqStrName ++ ": *mut " ++ renderType rustRet']
                        , "()"
-                       , "unsafe { std::ptr::write(ret_" ++ qqStrName ++ ", out.marshal()) }"
+                       , "unsafe { ::std::ptr::write(ret_" ++ qqStrName ++ ", out.marshal()) }"
                        )
   void . emitCodeBlock . unlines $
     [ "#[no_mangle]"
@@ -366,7 +366,7 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
     , ") -> " ++ retTy ++ " {"
     , unlines [ "  let " ++ s ++ ": " ++ renderType t ++ " = " ++ marshal s ++ ".marshal();"
               | (s,t,v) <- zip3 rustArgNames rustConvertedArgs argsByVal
-              , let marshal x = if v then x else "unsafe { std::ptr::read(" ++ x ++ ") }"
+              , let marshal x = if v then x else "unsafe { ::std::ptr::read(" ++ x ++ ") }"
               ]
     , "  let out: " ++ renderType rustConvertedRet ++ " = (|| {" ++ renderTokens rustBody ++ "})();"
     , "  " ++ ret
