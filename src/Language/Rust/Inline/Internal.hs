@@ -27,8 +27,10 @@ import Language.Haskell.TH.Syntax
 
 import Control.Monad               ( when ) 
 import Data.Typeable               ( Typeable )
+import Data.Monoid                 ( Endo(..) )
 import Data.Maybe                  ( fromMaybe )
 import Data.List                   ( unfoldr )
+import Data.Char                   ( isAlpha, isAlphaNum )
 
 import System.FilePath             ( (</>), (<.>), takeExtension )
 import System.Directory            ( copyFile, createDirectoryIfMissing )
@@ -37,32 +39,102 @@ import System.Exit                 ( ExitCode(..) )
 
 import Text.JSON
 
--- | Represents blocks of code to be emitted
-newtype CodeBlocks = CodeBlocks { reversedCodeBlocks :: [String] }
+
+-- * Module State
+
+-- ** Code Blocks
+
+-- | All of the code that needs to be emitted to the final Rust file.
+-- @initCodeBlocks@ is responsible for initializing TH state (in 'Q').
+newtype CodeBlocks = CodeBlocks { showsCodeBlocks :: ShowS }
   deriving ( Typeable )
 
 
--- | Figure out what file we are currently in.
+-- | Initialize the 'CodeBlocks' of the current module. Crash if it is already
+-- intialized. This must be called exactly once.
+initCodeBlocks :: Maybe [(String,String)]  -- ^ dependencies, if crate root
+               -> Q () 
+initCodeBlocks dependenciesOpt = do
+  -- check if there is already something there
+  cb <- getQ
+  case cb of
+    Nothing -> pure ()
+    Just (CodeBlocks _) -> fail "initCodeBlocks: CodeBlocks already initialized"
+  
+  -- add hooks for writing out files (and possibly compiling the project)
+  let finalizer = case dependenciesOpt of
+                    Nothing -> fileFinalizer 
+                    Just deps -> fileFinalizer *> cargoFinalizer [] deps
+  addModFinalizer finalizer
+
+  -- add a module state
+  putQ (CodeBlocks id)
+
+-- | Emit a raw 'String' of Rust code into the current 'ModuleState'.
+emitCodeBlock :: String -> Q [Dec]
+emitCodeBlock code = do
+  Just (CodeBlocks cbs) <- getQ 
+  putQ (CodeBlocks (cbs . showString code . showString "\n"))
+  pure []
+
+-- | Freeze the context and begin the part of the module which can contain Rust
+-- quasiquotes. If this module is also the crate root, use 'setCrateRoot'
+-- instead. 
 --
--- TODO: package part of this is buggy
-currentFile :: Q ( String    -- ^ package
-                 , [String]  -- ^ dot-delimited segments of module name
-                 )
-currentFile = do
-  Module (PkgName pkg) (ModName modName) <- thisModule
-  pure (pkg, splitDots modName)
-  where splitDots = unfoldr splitDot
-        splitDot s | null s = Nothing
-                   | otherwise = let (x,r) = break (== '.') s in Just (x,drop 1 r)
+-- This function must be called before any other Rust quasiquote in the file.
+setCrateModule :: Q [Dec]
+setCrateModule = do
+  initCodeBlocks Nothing
+  pure []
+
+-- | Freeze the context and begin the part of the module which can contain Rust
+-- quasiquotes. This function must be called in exactly one file in the
+-- package; it is what will trigger compilation of all Rust quasiquotes in the
+-- package and link the result into the final output.
+--
+-- This function must be called before any other Rust quasiquote in the file.
+setCrateRoot :: [(String, String)] -> Q [Dec]
+setCrateRoot dependencies = do
+  initCodeBlocks (Just dependencies)
+  pure []
+
+-- ** Contexts
+
+-- | Get the existing context
+getContext :: Q Context
+getContext = fromMaybe mempty <$> getQ
+
+-- | Append to the existing context 
+extendContext :: Q Context -> Q [Dec]
+extendContext qExtension = do
+  extension <- qExtension
+  ctx <- getContext
+  putQ (ctx <> extension) 
+  pure []
+
+-- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
+getRType :: RType -> Q (HType, Maybe RType)
+getRType rustType = do
+  (qht, qrtOpt) <- getRTypeInContext rustType <$> getContext
+  (,) <$> qht <*> sequence qrtOpt
+
+-- | Search in a 'Context' for the Rust type corresponding to a Haskell type.
+getHType :: HType -> Q RType
+getHType haskType = getHTypeInContext haskType =<< getContext
 
 
 -- * Finalizers
 
--- | A finalizer to run Cargo and link in the static library.
-cargoFinalizer :: [String]           -- ^ Extra @rustc@ arguments
-                  -> [(String, String)] -- ^ Dependencies
-                  -> Q ()
-cargoFinalizer rustcArgs dependencies = do
+-- | A finalizer to run Cargo and link in the static library. This function
+-- should be the very last @inline-rust@ related TH to run.
+-- 
+-- After generating an appropriate @Cargo.toml@ file, it calls out to Cargo to
+-- compile all the Rust files into a static library and which it then tells TH
+-- to link in. 
+cargoFinalizer :: [String]           -- ^ Extra @cargo@ arguments
+               -> [(String, String)] -- ^ Dependencies
+               -> Q ()
+cargoFinalizer extraArgs dependencies = do
   (pkg, mods) <- currentFile
 
   let dir = ".inline-rust" </> pkg
@@ -91,7 +163,7 @@ cargoFinalizer rustcArgs dependencies = do
   let cargoArgs = [ "build"
                   , "--release"
                   , "--manifest-path=" ++ cargoToml
-                  ] ++ rustcArgs 
+                  ] ++ extraArgs 
       msgFormat = [ "--message-format=json" ]
 
   ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
@@ -126,7 +198,9 @@ rustcErrMsg :: String
 rustcErrMsg = "Rust source file associated with this module failed to compile"
 
 -- | A finalizer to write out a Rust source file when we are done processing
--- this module.
+-- a module. This emits into a file in the @.inline-rust@ directory all of the
+-- Rust code we have produced while processing the current files contexts and
+-- quasiquotes.
 fileFinalizer :: Q ()
 fileFinalizer = do
   (pkg, mods) <- currentFile
@@ -135,90 +209,38 @@ fileFinalizer = do
       thisFile = foldr1 (</>) mods <.> "rs"
 
   -- Figure out what we are putting into this file 
-  Just codeBlocks <- fmap (reverse . reversedCodeBlocks) <$> getQ
+  Just cb <- getQ
   Just (Context (_,_,impls)) <- getQ
-  let code = unlines (codeBlocks ++
-                      [ "pub mod marshal {" ] ++
-                      [ "#[allow(unused_imports)] use super::*;" ] ++
-                      [ "pub trait MarshalInto<T> { fn marshal(self) -> T; }" ] ++
-                      impls ++
-                      [ "}" ] ++
-                      [ "#[allow(unused_imports)]  use self::marshal::*;" ])
+  let code = showsCodeBlocks cb 
+           . showString "pub mod marshal {\n"
+           . showString "#[allow(unused_imports)] use super::*;\n"
+           . showString "pub trait MarshalInto<T> { fn marshal(self) -> T; }\n"
+           . appEndo (foldMap (Endo . showString) impls)
+           . showString "}\n"
+           . showString "#[allow(unused_imports)]  use self::marshal::*;\n"
+           $ ""
 
   -- Write out the file
   runIO $ createDirectoryIfMissing True dir
   runIO $ writeFile (dir </> thisFile) code
 
+-- | Figure out what file we are currently in.
+currentFile :: Q ( String    -- ^ package name, amended to be a valid crate name
+                 , [String]  -- ^ dot-delimited segments of module name
+                 )
+currentFile = do
+  Module (PkgName pkg) (ModName modName) <- thisModule
+  let prefix | null pkg = "krate"
+             | isAlpha (head pkg) = ""
+             | otherwise = "krate_"
+      pkg' = prefix ++ map fixChar pkg
+  pure (pkg', splitDots modName)
+  where
+    fixChar c | isAlphaNum c = c
+              | otherwise = '_'
 
--- * Module state
+    splitDots = unfoldr splitDot
+    splitDot s | null s = Nothing
+               | otherwise = let (x,r) = break (== '.') s in Just (x,drop 1 r)
 
--- | Initialize the 'CodeBlocks' of the current module. Crash if it is already
--- intialized. This must be called exactly once.
-initCodeBlocks :: Maybe [(String,String)]  -- ^ dependencies, if crate root
-               -> Q () 
-initCodeBlocks dependenciesOpt = do
-  -- check if there is already something there
-  cb <- getQ
-  case cb of
-    Nothing -> pure ()
-    Just (CodeBlocks _) -> fail "initCodeBlocks: CodeBlocks already initialized"
-  
-  -- add hooks for writing out files (and possibly compiling the project)
-  case dependenciesOpt of
-    Nothing -> addModFinalizer fileFinalizer 
-    Just deps -> addModFinalizer (fileFinalizer *> cargoFinalizer [] deps)
-
-  -- add a module state
-  putQ (CodeBlocks [])
-
-
--- | Emit a raw 'String' of Rust code into the current 'ModuleState'.
-emitCodeBlock :: String -> Q [Dec]
-emitCodeBlock code = do
-  Just (CodeBlocks cbs) <- getQ 
-  putQ (CodeBlocks (code : cbs))
-  pure []
-
--- | Freeze the context and begin the part of the module which can contain Rust
--- quasiquotes. If this module is also the crate root, use 'setCrateRoot'
--- instead. 
---
--- This function must be called before any other Rust quasiquote in the file.
-setCrateModule :: Q [Dec]
-setCrateModule = do
-  initCodeBlocks Nothing
-  pure []
-
--- | Freeze the context and begin the part of the module which can contain Rust
--- quasiquotes. This function must be called in exactly one file in the
--- package; it is what will trigger compilation of all Rust quasiquotes in the
--- package and link the result into the final output.
---
--- This function must be called before any other Rust quasiquote in the file.
-setCrateRoot :: [(String, String)] -> Q [Dec]
-setCrateRoot dependencies = do
-  initCodeBlocks (Just dependencies)
-  pure []
-  
--- | Get the existing context
-getContext :: Q Context
-getContext = fromMaybe mempty <$> getQ
-
--- | Append to the existing context 
-extendContext :: Q Context -> Q [Dec]
-extendContext qExtension = do
-  extension <- qExtension
-  ctx <- getContext
-  putQ (ctx <> extension) 
-  pure []
-
--- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
-getRType :: RType -> Q (HType, Maybe RType)
-getRType rustType = do
-  (qht, qrtOpt) <- getRTypeInContext rustType <$> getContext
-  (,) <$> qht <*> sequence qrtOpt
-
--- | Search in a 'Context' for the Rust type corresponding to a Haskell type.
-getHType :: HType -> Q RType
-getHType haskType = getHTypeInContext haskType =<< getContext
 
