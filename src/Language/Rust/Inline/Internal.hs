@@ -36,6 +36,7 @@ import System.FilePath             ( (</>), (<.>), takeExtension )
 import System.Directory            ( copyFile, createDirectoryIfMissing )
 import System.Process              ( spawnProcess, readProcess, waitForProcess )
 import System.Exit                 ( ExitCode(..) )
+import System.Environment          ( setEnv )
 
 import Text.JSON
 
@@ -160,6 +161,19 @@ cargoFinalizer extraArgs dependencies = do
   runIO $ writeFile cargoToml cargoSrc
 
   -- Run Cargo to compile the project
+  --
+  -- NOTE: We set `--print native-static-libs` to inform the user these are the
+  --       libraries they should be specifying in `ghc-options`. It would be
+  --       much better if:
+  --
+  --         * We could parse the `stdout` and print out a `ghc-options` related
+  --           message. _However_ the message only gets printed if cargo ended
+  --           up doing work, and I don't know how to detect that.
+  --
+  --         * We could automatically link in these libraries, if GHC supported
+  --           specifying libraries to pass to the final linker call.
+  --
+  runIO $ setEnv "RUSTFLAGS" "--print native-static-libs"
   let cargoArgs = [ "build"
                   , "--release"
                   , "--manifest-path=" ++ cargoToml
