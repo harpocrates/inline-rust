@@ -42,3 +42,4 @@ install:
 
 script:
   - cabal new-test --allow-newer
+  - for f in examples/*.hs ; do cabal new-exec ghc -- -threaded -package inline-rust $f ; done

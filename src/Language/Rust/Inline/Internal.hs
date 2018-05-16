@@ -185,7 +185,8 @@ cargoFinalizer extraArgs dependencies = do
     (reportError rustcErrMsg)
  
   -- Run Cargo again to get the static library path
-  jOut <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
+  jOuts <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
+  let jOut = last (lines jOuts)
   rustLibFp <-
     case decode jOut of
       Error msg -> fail ("cargoFinalizer: " ++ msg)

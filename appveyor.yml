@@ -8,6 +8,7 @@ environment:
 
 # Manually install cabal-install, GHC, and rustup
 install:
+  - where bash
   - appveyor-retry curl %CABAL_ZIP% --output cabal.zip
   - 7z x cabal.zip
   - set PATH=%PATH%;c:\inline-rust
@@ -33,3 +34,4 @@ build_script:
 
 test_script:
   - cabal --store-dir=c:\cabal-store new-test --allow-newer
+  - for %%f in (examples\*.hs) do (cabal --store-dir="c:\cabal-store" new-exec ghc -- -lwinapi_secur32 -lwinapi_credui -lwinapi_kernel32 -lwinapi_advapi32 -ladvapi32 -lws2_32 -luserenv -lshell32 -lgcc_eh -lpthread -threaded -package inline-rust %%f)
