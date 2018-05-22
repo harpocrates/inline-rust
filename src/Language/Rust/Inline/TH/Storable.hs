@@ -22,11 +22,11 @@ import Language.Rust.Inline.TH.Utilities
 
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax hiding (lift)
-import Control.Monad.Trans.State (StateT(..), get, put)
-import Control.Monad.Trans.Class (lift)
-import Data.Traversable          (for)
-import Foreign.Ptr               (plusPtr, castPtr, Ptr)
-import Data.Word                 (Word8)
+import Control.Monad.Trans.State ( StateT(..), get, put )
+import Control.Monad.Trans.Class ( lift )
+import Data.Traversable          ( for )
+import Foreign.Ptr               ( plusPtr, castPtr, Ptr )
+import Data.Word                 ( Word8, Word16, Word32, Word64 )
 import Foreign.Storable
 
 -- | Generate 'Storable' instance for a non-recursive simple algebraic data
@@ -86,6 +86,7 @@ nameCon n = Constructor (ConP n) (foldl AppE (ConE n))
 
 tupCon :: Constructor
 tupCon = Constructor TupP TupE 
+
 
 -- * Alignment
 
@@ -180,6 +181,8 @@ pokeCon con pokeFields ptr = do
 
 -- * Traversing fields (putting everything together)
 
+-- TODO: look at `alignPtr :: Ptr a -> Int -> Ptr a`
+
 -- | Process a field of a given type.
 processField :: Type -> StructState (Exp -> Q Exp, Exp -> Q Exp)
 processField ty = do
@@ -225,6 +228,7 @@ processField ty = do
   pure ( \addrE -> [e| peek (castPtr $(pure addrE) `plusPtr` $(unType <$> beginOff)) |]
        , \addrE -> [e| poke (castPtr $(pure addrE) `plusPtr` $(unType <$> beginOff)) |]
        )
+
 
 -- | Process an algebraic data type.
 --
@@ -272,14 +276,23 @@ processADT [(con, fields)] = do
 
 processADT cons = do
 
-  -- TODO put more than a word if there are more than 8 constructors
-  i <- Alignment [] <$> [|| 1 ||] <*> [|| 1 ||]
+  let discNum = length cons
+  discTy <- snd . head . dropWhile (\(m,_) -> discNum > m + 1) $
+              [ (fromIntegral (maxBound :: Word8),  [t| Word8  |])
+              , (fromIntegral (maxBound :: Word16), [t| Word16 |])
+              , (fromIntegral (maxBound :: Word32), [t| Word32 |])
+              , (fromIntegral (maxBound :: Word64), [t| Word64 |])
+              ]
+
+  initAlign <- mempty
   (conPeekPokess, algns) <- unzip <$> do
     for cons $ \(con, fields) -> do
-      (peekPokes, algn) <- runStateT (traverse processField fields) i
+      (peekPokes, algn) <- runStateT (traverse processField fields) initAlign
       let (peekFields, pokeFields) = unzip peekPokes
       pure ((con, peekFields, pokeFields), algn)
   Alignment ds off algn <- mconcat (map pure algns)
+  let discSizeOf = [e| sizeOf (undefined :: $(pure discTy)) |]
+      algn' = [e| $discSizeOf `max` $(pure . unType $ algn) |]
   let ds' = map pure $ ds
 
   -- sizeOf
@@ -287,48 +300,52 @@ processADT cons = do
     Just sizeOfN <- lookupValueName "sizeOf"
     funD sizeOfN [clause [wildP]
                          (normalB [e| let c = $(pure . unType $ off)
-                                      in c + mod (negate c) $(pure . unType $ algn) |])
+                                      in $algn' + c + mod (negate c) $algn' |])
                          ds']
 
   -- alignment
   alignment_ <- do
     Just alignmentN <- lookupValueName "alignment"
-    funD alignmentN [clause [wildP] (normalB (pure . unType $ algn)) ds']
+    funD alignmentN [clause [wildP] (normalB algn') ds']
 
   -- peek
   peek_ <- do
     ptr <- newName "ptr"
+    ptrOff <- newName "ptrOff"
+    d' <- [d| $(varP ptrOff) = $(varE ptr) `plusPtr` $algn' |]
     disc <- newName "disc"
-    let mtchs = [ match (litP n') (normalB (peekCon con peekFields ptr)) []
+    let mtchs = [ match (litP n') (normalB (peekCon con peekFields ptrOff)) []
                 | (n, (con, peekFields, _)) <- zip [0..] conPeekPokess
                 , let n' = IntegerL n
                 ]
     Just peekN <- lookupValueName "peek"
     funD peekN
          [clause [varP ptr]
-                 (normalB (doE [ bindS (varP disc) [e| peek (castPtr $(varE ptr) :: Ptr Word8) |]
+                 (normalB (doE [ bindS (varP disc) [e| peek (castPtr $(varE ptr) :: Ptr $(pure discTy)) |]
                                , noBindS (caseE (varE disc) mtchs)
                                ]))
-                 ds']
+                 (map pure d' ++ ds')]
 
   -- poke
   poke_ <- do
     ptr <- newName "ptr"
+    ptrOff <- newName "ptrOff"
+    d' <- [d| $(varP ptrOff) = $(varE ptr) `plusPtr` $algn' |]
     disc <- newName "disc"
     let mtchs = [ do { (pat,body) <- patBody
                      ; match (pure pat)
-                             (normalB (doE (map noBindS [ [e| poke (castPtr $(varE ptr) :: Ptr Word8) $(litE n') |]
-                                                        , pure body
+                             (normalB (doE (map noBindS [ [e| poke (castPtr $(varE ptr) :: Ptr $(pure discTy)) $(litE n') |]
+                                                          , pure body
                                                         ])))
                              []
                      }
                 | (n, (con, _, pokeFields)) <- zip [0..] conPeekPokess
-                , let patBody = pokeCon con pokeFields ptr
+                , let patBody = pokeCon con pokeFields ptrOff
                 , let n' = IntegerL n
                 ]
     Just pokeN <- lookupValueName "poke"
     funD pokeN
-         [clause [varP ptr, varP disc] (normalB (caseE (varE disc) mtchs)) ds']
+         [clause [varP ptr, varP disc] (normalB (caseE (varE disc) mtchs)) (map pure d' ++ ds')]
 
   pure [sizeOf_, alignment_, peek_, poke_]
 

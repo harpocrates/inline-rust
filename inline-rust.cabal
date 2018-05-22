@@ -79,7 +79,9 @@ test-suite spec
                      , PointerTypes
                      , FunctionPointerTypes
                      , PreludeTypes
+                     , AlgebraicDataTypes
   build-depends:       base
                      , inline-rust
+                     , language-rust
                      , hspec
                      , ghc-prim

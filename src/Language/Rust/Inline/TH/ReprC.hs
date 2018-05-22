@@ -15,6 +15,9 @@ module Language.Rust.Inline.TH.ReprC (
   mkGenPathTy,
 ) where
 
+-- TODO: Map haskell records to Rust records
+-- TODO: Way for users to specify the attributes they want on generated data types
+
 import Language.Rust.Inline.TH.Utilities
 import Language.Rust.Inline.Context
 
@@ -27,6 +30,8 @@ import Control.Monad                       ( void )
 import Data.Traversable                    ( for )
 import Data.List.NonEmpty                  ( NonEmpty(..) )
 import Data.Char                           ( toUpper )
+import Data.Maybe                          ( isJust, fromMaybe )
+import Data.Word
 
 -- | TODO mangle me
 freshIdent :: String -> Q Ident
@@ -99,6 +104,23 @@ mkArm p e = Arm [] (p :| []) Nothing e ()
 
 type TyVarDict = [(Name, TyParam ())]
 
+data TranslatedTy a = Translated
+  { direct :: a       -- ^ The direct translation
+  , optReprC :: Maybe a  -- ^ The @#[repr(C)]@ translation, if different from the
+                      -- direct one
+  }
+
+instance Functor TranslatedTy where
+  fmap f (Translated d r) = Translated (f d) (fmap f r)
+{-
+instance Applicative TranslatedTy where
+  pure x = Translated x Nothing
+  Translated d1 Nothing <*> Translated d2 Nothing = Translated (d1 d2) Nothing
+  t1 <*> t2 = Translated (direct t1 $ direct t2) (getReprC t1 $ getReprC t2)
+-}
+getReprC :: TranslatedTy a -> a
+getReprC = fromMaybe <$> direct <*> optReprC
+
 
 mkReprC :: Context         -- ^ current context (in order to lookup what Rust types corresponding to
                            -- Haskell ones)
@@ -129,14 +151,26 @@ mkReprC ctx ty = do
 
   case cons of
     [(_, tys)] -> do
-      (_, (i, c), item) <- mkStruct ctx' dict False n tys
-      impl <- mkMarshalStructImpl dict i c
+      str <- mkStruct ctx' dict False n (mkName (nameBase n <> "C")) tys
+      let (i1,i2,c,items) = case str of
+            Translated (_, (i1', c'), item1) (Just (_, (i2', _), item2)) -> (i1',i2',c',[item1,item2])
+            Translated (_, (i1', c'), item1) Nothing -> (i1',i1',c',[item1])
+      impls <- mkMarshalStructImpls dict i1 i2 c
 
-      pure (i, Nothing, [item], [impl])   
+      pure (i1, Just i2, items, impls)   
     _ -> do
-      (tys, is,     items) <- unzip3 <$> traverse (\(n',ts) -> mkStruct ctx' dict True (mkName (nameBase n' ++ "C")) ts) cons
+      (tys, is,     items) <- unzip3 <$> traverse (\(n',ts) ->  let nc = (mkName (nameBase n' ++ "C")) in fmap getReprC (mkStruct ctx' dict True nc nc ts)) cons
+      
       (tyU, iUnion, itemU) <- mkUnion dict (mkName (nameBase n ++ "CUnion")) tys
-      (_, iTagged, item) <- mkTagged dict (mkName (nameBase n ++ "C")) (mkPathTy "u8") tyU
+      
+      let numDiscs = length cons
+          disc = snd . head . dropWhile (\(m,_) -> numDiscs > m + 1) $
+              [ (fromIntegral (maxBound :: Word8),  "u8")
+              , (fromIntegral (maxBound :: Word16), "u16")
+              , (fromIntegral (maxBound :: Word32), "u32")
+              , (fromIntegral (maxBound :: Word64), "u64")
+              ]
+      (_, iTagged, item) <- mkTagged dict (mkName (nameBase n ++ "C")) (mkPathTy disc) tyU
      
       (_, iEnum, iVars, itemE) <- mkEnum ctx' dict n cons
       (impl1, impl2) <- mkMarshalEnumImpls dict iTagged iUnion is iEnum iVars
@@ -144,11 +178,12 @@ mkReprC ctx ty = do
       pure (iEnum, Just iTagged, items ++ [itemU, item, itemE], [impl1, impl2])
 
 
-mkMarshalStructImpl :: TyVarDict
-                    -> Ident     -- ^ struct name
-                    -> Int       -- ^ number of arguments
-                    -> Q ( Item () )
-mkMarshalStructImpl dict nStruct n = do
+mkMarshalStructImpls :: TyVarDict
+                     -> Ident     -- ^ struct 1's name
+                     -> Ident     -- ^ struct 2's name
+                     -> Int       -- ^ number of arguments
+                     -> Q [Item ()]
+mkMarshalStructImpls dict nStruct nStruct' n = do
   let -- two copies of type parameters: @T, U, ...@ and @T1, U1, ...@
       ts, ts1 :: [TyParam ()]
       (ts, ts1) = unzip [ (mkTyParam i', mkTyParam (i' <> "1"))
@@ -170,10 +205,13 @@ mkMarshalStructImpl dict nStruct n = do
 
       -- MarshalInto<MyStruct<T, U, ...>>
       marshalIntoStruct = mkMarshalInto nStruct ts
+      marshalIntoStruct' = mkMarshalInto nStruct' ts
 
       -- MyStruct<T1, U1, ...> and MyStruct<T, U, ...>
       structTy1 = mkGenPathTy nStruct (map tyParam2Ty ts1)
+      structTy1' = mkGenPathTy nStruct' (map tyParam2Ty ts1)
       structTy = mkGenPathTy nStruct (map tyParam2Ty ts)
+      structTy' = mkGenPathTy nStruct' (map tyParam2Ty ts)
 
       vars = map (mkIdentPat . mkIdent . ('x' :) . show) [0..(n-1)]
       exps = map ( (\y -> MethodCall [] y "marshal" Nothing [] ())
@@ -182,21 +220,24 @@ mkMarshalStructImpl dict nStruct n = do
                  . ('x' :)
                  . show )
                  [0..(n-1)]
-      pat = if null vars
-               then PathP Nothing (mkPath nStruct) ()
-               else TupleStructP (mkPath nStruct) vars Nothing ()
-      stmts = [ Local pat Nothing (Just (mkPathExpr "self")) [] ()
-              , if n == 0
-                  then NoSemi (mkPathExpr nStruct) ()
-                  else NoSemi (Call [] (mkPathExpr nStruct) exps ()) ()
-              ]
+      pat x = if null vars
+                then PathP Nothing (mkPath x) ()
+                else TupleStructP (mkPath x) vars Nothing ()
+      stmts x y = [ Local (pat x) Nothing (Just (mkPathExpr "self")) [] ()
+                  , if n == 0
+                      then NoSemi (mkPathExpr y) ()
+                      else NoSemi (Call [] (mkPathExpr y) exps ()) ()
+                  ]
 
       -- impl<T: Copy, U: Copy, ..., T1: Copy + Into<T>, U1: Copy + Into<U>, ...>
       --   MarshalInto<TaggedUnion<T1, U1, ...> for Enum<T, U, ...> { ... }
       impl1 = Impl [] InheritedV Final Normal Positive
                    (mkGenerics fullImplBds) (Just marshalIntoStruct)
-                   structTy1 [mkMarshalFunc structTy1 structTy stmts] ()
-  pure impl1
+                   structTy1' [mkMarshalFunc structTy1' structTy (stmts nStruct' nStruct)] ()
+      impl2 = Impl [] InheritedV Final Normal Positive
+                   (mkGenerics fullImplBds) (Just marshalIntoStruct')
+                   structTy1 [mkMarshalFunc structTy1 structTy' (stmts nStruct nStruct')] ()
+  pure (if nStruct /= nStruct' then [impl1, impl2] else [impl1])
 
 -- | Generate the pair of 'MarshalEnum' trait impl's that allow you to convert back and forth between the
 -- #[repr(C)] tagged union and the Rust enum.
@@ -360,7 +401,7 @@ mkEnum ctx dict n cons = do
     for cons $ \(nCon, flds) -> do
       let varN = mkIdent (nameBase nCon)
       varData <- mkVariant ctx flds False
-      pure (varN, Variant varN [] varData Nothing ())
+      pure (varN, Variant varN [] (direct varData) Nothing ())
 
   let enum = Enum [deriveCopyClone] PublicV itemN vars (mkGenerics ps) ()
 
@@ -449,34 +490,57 @@ mkStruct :: Context          -- ^ current context (in order to lookup what Rust 
                              -- Haskell ones)
          -> TyVarDict        -- ^ Mapping of Haskell type variables to Rust type parameters
          -> Bool             -- ^ Enforce a 'Copy' constraint on type parameters
-         -> Name             -- ^ What name to give the struct
+         -> Name             -- ^ What name to give the struct 
+         -> Name             -- ^ What name to give the reprC struct
          -> [Type]           -- ^ Fields of the struct
-         -> Q ( Ty ()        --   Output type
-              , (Ident, Int) --   Output name and arity
-              , Item ()      --   Struct definition
-              )
-mkStruct ctx dict copy n tys = do
-  var <- mkVariant ctx tys True
-
-  let itemN = mkIdent (nameBase n)
+         -> Q (TranslatedTy ( Ty ()        --   Output type
+                            , (Ident, Int) --   Output name and arity
+                            , Item ()      --   Struct definition
+                            ))
+mkStruct ctx dict copy n1 n2  tys = do
+  let itemN1 = mkIdent (nameBase n1)
+      itemN2 = mkIdent (nameBase n2)
       haskTysUsed = concatMap getAllVars tys
       copyPs = [ if copy then consBound copyBound typ else typ
                | (ht, typ) <- dict, ht `elem` haskTysUsed
                ]
-      struct = StructItem [reprC, deriveCopyClone] PublicV itemN var (mkGenerics copyPs) ()
-      outTy = mkGenPathTy itemN [ mkPathTy i' | TyParam _ (Ident i _ _) _ _ _ <- copyPs
+      mkStructItem as n varD = StructItem as PublicV n varD (mkGenerics copyPs) ()
+      mkOutTy n = mkGenPathTy n [ mkPathTy i' | TyParam _ (Ident i _ _) _ _ _ <- copyPs
                                               , let i' = mkIdent (map toUpper i)
                                               ]
 
-
-  pure (outTy, (itemN, length tys), struct)
+  var <- mkVariant ctx tys True
+  case var of
+    Translated v Nothing  ->
+      let si = mkStructItem [reprC, deriveCopyClone] itemN1 v
+      in pure (Translated (mkOutTy itemN1, (itemN1, length tys), si) Nothing)
+    Translated v (Just r) -> 
+      let si = mkStructItem [deriveCopyClone] itemN1 v
+          si' = mkStructItem [reprC, deriveCopyClone] itemN2 r
+      in pure (Translated (mkOutTy itemN1, (itemN1, length tys), si)
+                          (Just (mkOutTy itemN2, (itemN2, length tys), si')))
 
 -- | Construct the variant data for struct fields.
-mkVariant :: Context -> [Type] -> Bool -> Q (VariantData ())
-mkVariant _ [] _ = pure (UnitD ())
+mkVariant :: Context                           -- ^ current context
+          -> [Type]                            -- ^ Haskell types
+          -> Bool                              -- ^ Whether to make fields public
+          -> Q (TranslatedTy (VariantData ())) -- ^ Rust data
+mkVariant _ [] _ = pure (Translated (UnitD ()) Nothing)
 mkVariant ctx tys pub = do
-  rustTys <- traverse (`getHTypeInContext` ctx) tys
   let vis = if pub then PublicV else InheritedV 
-      structFlds = [ StructField Nothing vis t [] () | t <- rustTys ]
-  pure (TupleD structFlds ())
+
+  -- Regular Rust types corresponding to Haskell ones
+  rustTys <- traverse (\ht -> getHTypeInContext ht ctx) tys
+  let structFlds  = [ StructField Nothing vis t [] () | t <- rustTys ]
+      variantData = TupleD structFlds ()
+
+  -- Intermediate Rust types corresponding to Haskell ones
+  rustTys' <- traverse (\rt -> sequence . snd $ getRTypeInContext rt ctx) rustTys
+  let needInter    = any isJust rustTys'
+      rustInterTys = zipWith fromMaybe rustTys rustTys'
+      structFlds'  = [ StructField Nothing vis t [] () | t <- rustInterTys ]
+      variantData' | needInter = Just (TupleD structFlds' ())
+                   | otherwise = Nothing
+
+  pure (Translated variantData variantData')
 
