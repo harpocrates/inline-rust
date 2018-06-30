@@ -185,7 +185,8 @@ cargoFinalizer extraArgs dependencies = do
     (reportError rustcErrMsg)
  
   -- Run Cargo again to get the static library path
-  jOut <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
+  jOuts <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
+  let jOut = last (lines jOuts)
   rustLibFp <-
     case decode jOut of
       Error msg -> fail ("cargoFinalizer: " ++ msg)
@@ -229,7 +230,7 @@ fileFinalizer = do
            . showString "pub mod marshal {\n"
            . showString "#[allow(unused_imports)] use super::*;\n"
            . showString "pub trait MarshalInto<T> { fn marshal(self) -> T; }\n"
-           . appEndo (foldMap (Endo . showString) impls)
+           . appEndo (foldMap (\s -> Endo (showString s . showString "\n")) impls)
            . showString "}\n"
            . showString "#[allow(unused_imports)]  use self::marshal::*;\n"
            $ ""

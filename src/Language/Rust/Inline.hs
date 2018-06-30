@@ -97,7 +97,7 @@ import Foreign.Marshal.Array                 ( withArrayLen, newArray )
 import Foreign.Marshal.Unsafe                ( unsafeLocalState )
 import Foreign.Ptr                           ( freeHaskellFunPtr, Ptr )
 
-import Control.Monad                         ( void, when )
+import Control.Monad                         ( void )
 import Data.List                             ( intercalate )
 import Data.Traversable                      ( for )
 import System.Random                         ( randomIO )
@@ -251,6 +251,9 @@ rustQuasiQuoter safety isPure supportDecs = QuasiQuoter { quoteExp = expQuoter
               | otherwise = err
 
 
+showTy :: Type -> String
+showTy = show . pprParendType
+
 -- | This function sums up the packages. What it does:
 --
 --    1. Map the Rust type annotations in the quasiquote to their Haskell types.
@@ -280,26 +283,36 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   (haskArgs, reprCArgs) <- unzip <$> traverse (getRType . void) rustArgs
 
   -- Convert the Haskell return type to a marshallable FFI type
-  (retByVal, inIO, haskRet') <- do
-    (marshallable, unlifted) <- ghcMarshallable haskRet
-    if marshallable
-      then if unlifted
-             then pure (True, False, pure haskRet)
-             else pure (True, True, [t| IO $(pure haskRet) |])
-      else pure (False, True, [t| Ptr $(pure haskRet) -> IO () |])
-    
+  (returnFfi, haskRet') <- do
+    marshalFrom <- ghcMarshallable haskRet
+    ret <- case marshalFrom of
+             BoxedDirect -> [t| IO $(pure haskRet) |]
+             BoxedIndirect -> [t| Ptr $(pure haskRet) -> IO () |]
+             UnboxedDirect
+               | isPure -> pure haskRet
+               | otherwise ->
+                   let retTy = showTy haskRet
+                   in fail ("Cannot put unlifted type ‘" ++ retTy ++ "’ in IO")
+    pure (marshalFrom, pure ret)
+
   -- Convert the Haskell arguments to marshallable FFI types
   (argsByVal, haskArgs') <- fmap unzip $
     for haskArgs $ \haskArg -> do
-      (marshallable, unlifted) <- ghcMarshallable haskArg
-      if marshallable
-        then pure (True, haskArg)
-        else do ptr <- [t| Ptr $(pure haskArg) |]
-                when unlifted $
-                  let argTy = show (pprParendType haskArg)
-                      msg = "Cannot pass unmarshallable and unlifted type "
-                  in fail (msg ++ argTy)
-                pure (False, ptr)
+      marshalForm <- ghcMarshallable haskArg
+      case marshalForm of
+        BoxedIndirect
+          | returnFfi == UnboxedDirect ->
+              let argTy = showTy haskArg
+                  retTy = showTy haskRet
+              in fail ("Cannot pass an argument ‘" ++ argTy ++ "’" ++
+                       " indirectly when returning an unlifted type " ++
+                       "‘" ++ retTy ++ "’")
+
+          | otherwise -> do
+              ptr <- [t| Ptr $(pure haskArg) |]
+              pure (False, ptr)
+
+        _ -> pure (True, haskArg)
 
   -- Generate the Haskell FFI import declaration and emit it
   haskSig <- foldr (\l r -> [t| $(pure l) -> $r |]) haskRet' haskArgs'
@@ -307,25 +320,28 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
   addTopDecls [ffiImport]
 
   -- Generate the Haskell FFI call
-  let goArgs :: [Q Exp] -> [(String, Bool)] -> Q Exp
+  let goArgs :: [Q Exp]           -- ^ arguments accumulated so far (reversed)
+             -> [(String, Bool)]  -- ^ remaining arguments to process
+             -> Q Exp             -- ^ FFI call
 
       -- Once we run out of arguments we call the quasiquote function with all the
       -- accumulated arguments. If the return value is not marshallable, we have to 
       -- 'alloca' some space to put the return value.
-      goArgs acc [] | retByVal = appsE (varE qqName : reverse acc)
-                    | otherwise = do
-                        ret <- newName "ret"
-                        [e| alloca (\( $(varP ret) ) ->
-                              do { $(appsE (varE qqName : reverse (varE ret : acc)))
-                                 ; peek $(varE ret)
-                                 }) |]
+      goArgs acc []
+        | returnFfi /= BoxedIndirect = appsE (varE qqName : reverse acc)
+        | otherwise = do
+            ret <- newName "ret"
+            [e| alloca (\( $(varP ret) ) ->
+                  do { $(appsE (varE qqName : reverse (varE ret : acc)))
+                     ; peek $(varE ret)
+                     }) |]
      
       -- If an argument is by value, we just stack it into the accumulated arguments.
       -- Otherwise, we use 'with' to get a pointer to its stack position.
       goArgs acc ((argStr, byVal) : args) = do
         arg <- lookupValueName argStr
         case arg of
-          Nothing -> fail ("Could not find Haskell variable `" ++ argStr ++ "'")
+          Nothing -> fail ("Could not find Haskell variable ‘" ++ argStr ++ "’")
           Just argName | byVal -> goArgs (varE argName : acc) args
                        | otherwise -> do
                           x <- newName "x"
@@ -333,10 +349,9 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
                                 $(goArgs (varE x : acc) args)) |]
 
   let haskCall' = goArgs [] (rustArgNames `zip` argsByVal)
-      haskCall = case (isPure, inIO) of
-                   (True,  True)  -> [e| unsafeLocalState $haskCall' |]
-                   (False, False) -> [e| pure $haskCall' |]
-                   _              -> haskCall'
+      haskCall = if isPure && returnFfi /= UnboxedDirect
+                   then [e| unsafeLocalState $haskCall' |]
+                   else haskCall'
 
   -- Generate the Rust function arguments and the converted arguments
   let (rustArgs', rustConvertedArgs) = unzip $ zipWith mergeArgs rustArgs reprCArgs
@@ -347,7 +362,8 @@ processQQ safety isPure (QQParse rustRet rustBody rustNamedArgs) = do
       mergeArgs t (Just tInter) = (fmap (const mempty) tInter, t)
   
   -- Generate the Rust function.
-  let (retArg, retTy, ret)
+  let retByVal = returnFfi /= BoxedIndirect
+      (retArg, retTy, ret)
          | retByVal  = ( []
                        , renderType rustRet'
                        , "out.marshal()"

@@ -124,7 +124,7 @@ tupleContext n = pure (Context ([rule],[rev],tupleItems n))
     -- Compute the Rust type
     pure (TupTy <$> sequence tys' <*> pure ())
 
-  getTupTy acc (TupleT n) | length acc == n = Just (reverse acc)
+  getTupTy acc (TupleT n) | length acc == n = Just acc
   getTupTy acc (AppT t1 t2) = getTupTy (t2:acc) t1
   getTupTy acc (ParensT t) = getTupTy acc t
   getTupTy _ _ = Nothing
