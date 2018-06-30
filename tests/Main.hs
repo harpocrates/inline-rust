@@ -15,6 +15,7 @@ import GhcUnboxedTypes
 import PointerTypes
 import FunctionPointerTypes
 import PreludeTypes
+import CompoundTypes
 
 import Test.Hspec
 
@@ -27,12 +28,14 @@ mod SimpleTypes;
 mod PointerTypes;
 mod FunctionPointerTypes;
 mod PreludeTypes;
+mod CompoundTypes;
 
 pub use GhcUnboxedTypes::*;
 pub use SimpleTypes::*;
 pub use PointerTypes::*;
 pub use FunctionPointerTypes::*;
 pub use PreludeTypes::*;
+pub use CompoundTypes::*;
 |]
 
 main :: IO ()
@@ -43,3 +46,4 @@ main = hspec $
     pointerTypes
     funcPointerTypes
     preludeTypes
+    compoundTypes

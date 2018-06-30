@@ -79,7 +79,9 @@ test-suite spec
                      , PointerTypes
                      , FunctionPointerTypes
                      , PreludeTypes
+                     , CompoundTypes
   build-depends:       base
                      , inline-rust
+                     , language-rust
                      , hspec
                      , ghc-prim
