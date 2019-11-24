@@ -7,6 +7,7 @@ Maintainer  : alec.theriault@gmail.com
 Stability   : experimental
 Portability : GHC
 -}
+{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -35,9 +36,13 @@ import Data.Int                    ( Int8, Int16, Int32, Int64 )
 import Data.Word                   ( Word8, Word16, Word32, Word64 )
 import Foreign.Ptr                 ( Ptr, FunPtr )
 import Foreign.C.Types             -- pretty much every type here is used
+import qualified Control.Monad.Fail as Fail
 
 import GHC.Exts                    ( Char#, Int#, Word#, Float#, Double#,
                                      ByteArray# )
+
+instance Fail.MonadFail First where
+  fail _ = mempty
 
 -- Easier on the eyes
 type RType = Ty ()

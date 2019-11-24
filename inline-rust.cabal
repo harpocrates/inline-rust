@@ -45,7 +45,7 @@ library
                      , ForeignFunctionInterface
                      , ScopedTypeVariables
 
-  build-depends:       base                 >=4.9 && <5.0
+  build-depends:       base                 >=4.12 && <5.0
                      , language-rust        >=0.2.0
                      , prettyprinter        >=1.1
                      , process              >=1.4
