@@ -25,14 +25,14 @@ import Language.Rust.Inline.Context
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 
-import Control.Monad               ( when ) 
+import Control.Monad               ( when )
 import Data.Typeable               ( Typeable )
 import Data.Monoid                 ( Endo(..) )
 import Data.Maybe                  ( fromMaybe )
 import Data.List                   ( unfoldr )
 import Data.Char                   ( isAlpha, isAlphaNum )
 
-import System.FilePath             ( (</>), (<.>), takeExtension )
+import System.FilePath             ( (</>), (<.>), takeDirectory, takeExtension )
 import System.Directory            ( copyFile, createDirectoryIfMissing )
 import System.Process              ( spawnProcess, readProcess, waitForProcess )
 import System.Exit                 ( ExitCode(..) )
@@ -54,17 +54,17 @@ newtype CodeBlocks = CodeBlocks { showsCodeBlocks :: ShowS }
 -- | Initialize the 'CodeBlocks' of the current module. Crash if it is already
 -- intialized. This must be called exactly once.
 initCodeBlocks :: Maybe [(String,String)]  -- ^ dependencies, if crate root
-               -> Q () 
+               -> Q ()
 initCodeBlocks dependenciesOpt = do
   -- check if there is already something there
   cb <- getQ
   case cb of
     Nothing -> pure ()
     Just (CodeBlocks _) -> fail "initCodeBlocks: CodeBlocks already initialized"
-  
+
   -- add hooks for writing out files (and possibly compiling the project)
   let finalizer = case dependenciesOpt of
-                    Nothing -> fileFinalizer 
+                    Nothing -> fileFinalizer
                     Just deps -> fileFinalizer *> cargoFinalizer [] deps
   addModFinalizer finalizer
 
@@ -74,13 +74,13 @@ initCodeBlocks dependenciesOpt = do
 -- | Emit a raw 'String' of Rust code into the current 'ModuleState'.
 emitCodeBlock :: String -> Q [Dec]
 emitCodeBlock code = do
-  Just (CodeBlocks cbs) <- getQ 
+  Just (CodeBlocks cbs) <- getQ
   putQ (CodeBlocks (cbs . showString code . showString "\n"))
   pure []
 
 -- | Freeze the context and begin the part of the module which can contain Rust
 -- quasiquotes. If this module is also the crate root, use 'setCrateRoot'
--- instead. 
+-- instead.
 --
 -- This function must be called before any other Rust quasiquote in the file.
 setCrateModule :: Q [Dec]
@@ -105,12 +105,12 @@ setCrateRoot dependencies = do
 getContext :: Q Context
 getContext = fromMaybe mempty <$> getQ
 
--- | Append to the existing context 
+-- | Append to the existing context
 extendContext :: Q Context -> Q [Dec]
 extendContext qExtension = do
   extension <- qExtension
   ctx <- getContext
-  putQ (ctx <> extension) 
+  putQ (ctx <> extension)
   pure []
 
 -- | Search in a 'Context' for the Haskell type corresponding to a Rust type.
@@ -128,10 +128,10 @@ getHType haskType = getHTypeInContext haskType =<< getContext
 
 -- | A finalizer to run Cargo and link in the static library. This function
 -- should be the very last @inline-rust@ related TH to run.
--- 
+--
 -- After generating an appropriate @Cargo.toml@ file, it calls out to Cargo to
 -- compile all the Rust files into a static library and which it then tells TH
--- to link in. 
+-- to link in.
 cargoFinalizer :: [String]           -- ^ Extra @cargo@ arguments
                -> [(String, String)] -- ^ Dependencies
                -> Q ()
@@ -177,22 +177,23 @@ cargoFinalizer extraArgs dependencies = do
   let cargoArgs = [ "build"
                   , "--release"
                   , "--manifest-path=" ++ cargoToml
-                  ] ++ extraArgs 
+                  ] ++ extraArgs
       msgFormat = [ "--message-format=json" ]
 
   ec <- runIO $ spawnProcess "cargo" cargoArgs >>= waitForProcess
   when (ec /= ExitSuccess)
     (reportError rustcErrMsg)
- 
+
   -- Run Cargo again to get the static library path
   jOuts <- runIO $ readProcess "cargo" (cargoArgs ++ msgFormat) ""
-  let jOut = last (lines jOuts)
+  let jOut = last (init $ lines jOuts)
+  -- runIO $ putStrLn jOuts
   rustLibFp <-
     case decode jOut of
       Error msg -> fail ("cargoFinalizer: " ++ msg)
       Ok jObj -> case lookup "filenames" (fromJSObject jObj) of
                    Just (JSArray [ JSString jStr ]) -> pure (fromJSString jStr)
-                   _ -> fail ("cargoFinalizer: did not find one static library")
+                   _ -> fail ("cargoFinalizer: did not find one static library from output: " ++ show (fromJSObject jObj))
 
   -- Move the library to a GHC temporary file
   let ext = takeExtension rustLibFp
@@ -223,10 +224,10 @@ fileFinalizer = do
   let dir = ".inline-rust" </> pkg
       thisFile = foldr1 (</>) mods <.> "rs"
 
-  -- Figure out what we are putting into this file 
+  -- Figure out what we are putting into this file
   Just cb <- getQ
   Just (Context (_,_,impls)) <- getQ
-  let code = showsCodeBlocks cb 
+  let code = showsCodeBlocks cb
            . showString "pub mod marshal {\n"
            . showString "#[allow(unused_imports)] use super::*;\n"
            . showString "pub trait MarshalInto<T> { fn marshal(self) -> T; }\n"
@@ -236,8 +237,9 @@ fileFinalizer = do
            $ ""
 
   -- Write out the file
-  runIO $ createDirectoryIfMissing True dir
-  runIO $ writeFile (dir </> thisFile) code
+  let filepath = dir </> thisFile
+  runIO $ createDirectoryIfMissing True (takeDirectory filepath)
+  runIO $ writeFile filepath code
 
 -- | Figure out what file we are currently in.
 currentFile :: Q ( String    -- ^ package name, amended to be a valid crate name
@@ -257,5 +259,3 @@ currentFile = do
     splitDots = unfoldr splitDot
     splitDot s | null s = Nothing
                | otherwise = let (x,r) = break (== '.') s in Just (x,drop 1 r)
-
-
